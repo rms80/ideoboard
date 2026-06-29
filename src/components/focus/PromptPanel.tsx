@@ -1,11 +1,11 @@
 import { useSceneStore, useCurrentNodeLocked } from "../../state/sceneStore";
-import { RESOLUTIONS, RENDERING_SPEEDS } from "../../types";
-import { Field, selectClass } from "../common/ui";
+import { Field } from "../common/ui";
 import { TagField } from "../common/TagField";
 
-// Free-text fields use <TagField> (#-autocomplete, drag-drop, resolved preview);
-// resolution/speed stay plain <select>s. All fields lock (read-only) once the
-// node has a generated image — iterate by spawning a new node instead.
+// Free-text fields use <TagField> (#-autocomplete, drag-drop, resolved preview).
+// Rendering speed lives next to Generate (ResultCycler), not here, since it can be
+// changed even on a frozen prompt. All fields lock (read-only) once the node has a
+// generated image — iterate by spawning a new node instead.
 export function PromptPanel() {
   const draft = useSceneStore((s) => s.draft);
   const editDraft = useSceneStore((s) => s.editDraft);
@@ -100,37 +100,6 @@ export function PromptPanel() {
           }
         />
       </Field>
-
-      <div className="grid grid-cols-2 gap-3">
-        <Field>
-          <select
-            className={selectClass}
-            disabled={locked}
-            value={draft.resolution}
-            onChange={(e) => editDraft((p) => void (p.resolution = e.target.value))}
-          >
-            {RESOLUTIONS.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field>
-          <select
-            className={selectClass}
-            disabled={locked}
-            value={draft.renderingSpeed}
-            onChange={(e) => editDraft((p) => void (p.renderingSpeed = e.target.value as never))}
-          >
-            {RENDERING_SPEEDS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
     </div>
   );
 }

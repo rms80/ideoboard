@@ -127,28 +127,32 @@ export interface V4JsonPrompt {
 
 export const RENDERING_SPEEDS: RenderingSpeed[] = ["TURBO", "DEFAULT", "QUALITY"];
 
-/** Representative Ideogram v4 resolutions ("WIDTHxHEIGHT"). Verify against API. */
+/** Supported Ideogram v4 resolutions ("WIDTHxHEIGHT"). */
 export const RESOLUTIONS: string[] = [
-  "1024x1024",
-  "1280x1280",
-  "1408x1408",
-  "1024x1280",
-  "1280x1024",
-  "1024x1536",
-  "1536x1024",
-  "1152x1536",
-  "1536x1152",
-  "1248x2496",
-  "2496x1248",
-  "1344x768",
-  "768x1344",
-  "1536x640",
-  "640x1536",
-  "2048x1152",
-  "1152x2048",
-  "3328x1248",
+  "2048x2048",
+  "1440x2880",
+  "2880x1440",
+  "1664x2496",
+  "2496x1664",
+  "1792x2240",
+  "2240x1792",
+  "1440x2560",
+  "2560x1440",
+  "1600x2560",
+  "2560x1600",
+  "1728x2304",
+  "2304x1728",
+  "1296x3168",
+  "3168x1296",
+  "1152x2944",
+  "2944x1152",
   "1248x3328",
+  "3328x1248",
+  "1280x3072",
+  "3072x1280",
+  "1024x3072",
+  "3072x1024",
 ];
 
-export const DEFAULT_RESOLUTION = "1024x1024";
+export const DEFAULT_RESOLUTION = "2048x2048";
 export const DEFAULT_RENDERING_SPEED: RenderingSpeed = "DEFAULT";

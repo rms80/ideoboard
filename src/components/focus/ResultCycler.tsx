@@ -2,7 +2,19 @@ import type { ReactNode } from "react";
 import { useSceneStore } from "../../state/sceneStore";
 import { useGenerationStore } from "../../state/generationStore";
 import { useUiStore } from "../../state/uiStore";
-import { Button, IconButton } from "../common/ui";
+import { DEFAULT_RENDERING_SPEED, type RenderingSpeed } from "../../types";
+import { Button } from "../common/ui";
+
+const SPEED_OPTIONS: { label: string; value: RenderingSpeed }[] = [
+  { label: "Default", value: "DEFAULT" },
+  { label: "Turbo", value: "TURBO" },
+  { label: "Quality", value: "QUALITY" },
+];
+
+// Compact prev/next arrows for the result cycler (tighter than the shared
+// IconButton's 32px square).
+const cyclerArrow =
+  "flex h-6 items-center justify-center rounded px-0.5 text-xs text-ink-dim transition hover:bg-surface-2 hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent";
 
 // Controls under the image. Generate/Regenerate stays dead-centered below the
 // image; Edit/Branch sits at the right; the Image/Prompts visibility toggles live
@@ -50,6 +62,8 @@ export function ResultCycler() {
   const showPrompts = useUiStore((s) => s.showPrompts);
   const toggleShowImage = useUiStore((s) => s.toggleShowImage);
   const toggleShowPrompts = useUiStore((s) => s.toggleShowPrompts);
+  const speed = useSceneStore((s) => s.draft?.renderingSpeed ?? DEFAULT_RENDERING_SPEED);
+  const setRenderingSpeed = useSceneStore((s) => s.setRenderingSpeed);
 
   const node = scene ? scene.nodes[scene.currentNodeId] : null;
   const status = useGenerationStore((s) => (node ? s.status[node.id] : undefined));
@@ -68,33 +82,57 @@ export function ResultCycler() {
     // Generate is the only in-flow child (justify-center) → dead-centered + defines
     // the row height; everything else is absolutely positioned around it.
     <div className="relative flex items-center justify-center">
-      {/* Left (floating): result cycler */}
-      <div className="absolute left-0 top-1/2 flex -translate-y-1/2 items-center gap-1">
-        <IconButton
+      {/* Left (floating): result cycler. Tight spacing; counter sized for 2 digits
+          per side ("99 / 99"). */}
+      <div className="absolute left-0 top-1/2 flex -translate-y-1/2 items-center gap-px">
+        <button
+          type="button"
           title="Previous result"
           disabled={count <= 1}
           onClick={() => setCurrentResultIndex(node.id, idx - 1)}
+          className={cyclerArrow}
         >
           ◀
-        </IconButton>
-        <span className="min-w-12 text-center text-xs tabular-nums text-ink-dim">
+        </button>
+        <span className="min-w-10 text-center text-xs tabular-nums text-ink-dim">
           {count === 0 ? "— / —" : `${idx + 1} / ${count}`}
         </span>
-        <IconButton
+        <button
+          type="button"
           title="Next result"
           disabled={count <= 1}
           onClick={() => setCurrentResultIndex(node.id, idx + 1)}
+          className={cyclerArrow}
         >
           ▶
-        </IconButton>
+        </button>
       </div>
 
-      {/* Center: Generate / Regenerate */}
+      {/* Rendering-speed picker, centered in the gap between the result cycler's
+          right edge (~68px after tightening) and Generate's left edge (50% − ~36px)
+          → 25% + 16px, so it doesn't overlap the ▶ arrow. Editable even when the
+          prompt is frozen — speed applies to the next Regenerate. */}
+      <div className="absolute left-[calc(25%_+_16px)] top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center overflow-hidden rounded-md">
+        {SPEED_OPTIONS.map((o) => (
+          <ToggleBtn
+            key={o.value}
+            active={speed === o.value}
+            onClick={() => setRenderingSpeed(o.value)}
+            title={`${o.label} rendering speed`}
+          >
+            {o.label}
+          </ToggleBtn>
+        ))}
+      </div>
+
+      {/* Center: Generate / Regenerate. Slightly larger than the default Button
+          (4px wider + taller) with bold text, via inline overrides. */}
       <Button
         variant="accent"
         disabled={busy}
         onClick={() => (hasImage ? regenerate(node.id) : generate())}
         title={hasImage ? "Append another result (new seed)" : "Generate this node's image"}
+        style={{ padding: "4px 6px", fontWeight: 700 }}
       >
         {primaryLabel}
       </Button>

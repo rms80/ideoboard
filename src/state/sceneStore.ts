@@ -22,6 +22,7 @@ import type {
   PromptBox,
   PromptTag,
   GenerationResult,
+  RenderingSpeed,
 } from "../types";
 import { createNode, clonePrompt } from "./factory";
 import { computeLayout } from "../services/layout";
@@ -40,6 +41,10 @@ interface SceneActions {
 
   /** Mutate the draft via an immer recipe (undoable). */
   editDraft: (recipe: (p: StructuredPrompt) => void) => void;
+  /** Set rendering speed on BOTH the draft and the committed current-node prompt,
+   *  even when locked — speed is a generation parameter (used by the next
+   *  Regenerate), not frozen prompt content. */
+  setRenderingSpeed: (speed: RenderingSpeed) => void;
 
   // Box edits (operate on draft, undoable)
   addBox: (box: PromptBox) => void;
@@ -115,6 +120,17 @@ export const useSceneStore = create<SceneStore>()(
         if (isLocked(get())) return;
         set((s) => {
           if (s.draft) recipe(s.draft);
+        });
+      },
+
+      // Deliberately NOT lock-gated: the user adjusts speed between Regenerates of
+      // a frozen node. Regenerate reads the committed node.prompt, so update both
+      // it and the draft to keep them in sync.
+      setRenderingSpeed: (speed) => {
+        set((s) => {
+          if (s.draft) s.draft.renderingSpeed = speed;
+          const node = s.scene?.nodes[s.scene.currentNodeId];
+          if (node) node.prompt.renderingSpeed = speed;
         });
       },
 
