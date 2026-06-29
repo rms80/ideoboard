@@ -1,0 +1,64 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+/* Class-based dark mode (html.dark) instead of OS preference. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Surfaces (neutral-900 family) + accent for current node / selection. */
+  --color-surface-0: #0a0a0b;
+  --color-surface-1: #131316;
+  --color-surface-2: #1c1c21;
+  --color-surface-3: #26262d;
+  --color-border: #33333d;
+  --color-ink: #e8e8ea;
+  --color-ink-dim: #a0a0a8;
+  --color-ink-faint: #6c6c78;
+  --color-accent: #6d8cff;
+  --color-accent-soft: #2a3354;
+  --color-danger: #f0506e;
+  --color-ok: #3fd089;
+}
+
+:root {
+  color-scheme: dark;
+  --tag-chip-bg: var(--color-accent-soft);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-surface-0);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Thin dark scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-3);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* React Flow dark surface */
+.react-flow {
+  --xy-background-color: var(--color-surface-0);
+}
