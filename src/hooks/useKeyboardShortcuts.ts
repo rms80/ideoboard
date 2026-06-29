@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { undo, redo } from "../state/sceneStore";
+import { undo, redo, useSceneStore } from "../state/sceneStore";
 import { useGenerationStore } from "../state/generationStore";
 import { useUiStore } from "../state/uiStore";
 
@@ -21,6 +21,13 @@ export function useKeyboardShortcuts(): void {
       const mod = e.metaKey || e.ctrlKey;
       const editable = isEditable(e.target);
 
+      // Block the browser's select-all outside of text fields (selection is only
+      // meaningful inside inputs; app-level selection is disabled via CSS).
+      if (mod && e.key.toLowerCase() === "a" && !editable) {
+        e.preventDefault();
+        return;
+      }
+
       // Undo / redo — defer to native text undo when editing a field.
       if (mod && e.key.toLowerCase() === "z") {
         if (editable) return;
@@ -41,6 +48,51 @@ export function useKeyboardShortcuts(): void {
       if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         useUiStore.getState().toggleViewMode();
+        return;
+      }
+
+      // Cmd/Ctrl+G switches to graph view (works even while editing a prompt field).
+      if (mod && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        useUiStore.getState().setViewMode("graph");
+        return;
+      }
+
+      // ←/→ cycle the current node's active image (multi-image nodes, wrapping);
+      // Shift+←/→ navigate to the previous (parent) / next (primary child) node.
+      // Both are skipped when a text field has focus, or — in focus view — when a
+      // box is selected, since arrows then nudge the box.
+      if (!mod && !e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        if (editable) return;
+        const ui = useUiStore.getState();
+        if (ui.viewMode === "focus" && ui.selectedBoxIds.length > 0) return;
+        const scene = useSceneStore.getState().scene;
+        if (!scene) return;
+        const node = scene.nodes[scene.currentNodeId];
+        if (!node) return;
+        const dir = e.key === "ArrowLeft" ? -1 : 1;
+
+        if (e.shiftKey) {
+          // Prev = parent; next = earliest-created child (the primary continuation).
+          const targetId =
+            dir < 0
+              ? node.parentId && scene.nodes[node.parentId]
+                ? node.parentId
+                : null
+              : (Object.values(scene.nodes)
+                  .filter((n) => n.parentId === node.id)
+                  .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))[0]?.id ??
+                  null);
+          if (!targetId) return;
+          e.preventDefault();
+          useSceneStore.getState().selectNode(targetId);
+          return;
+        }
+
+        if (node.results.length <= 1) return;
+        e.preventDefault();
+        const next = (node.currentResultIndex + dir + node.results.length) % node.results.length;
+        useSceneStore.getState().setCurrentResultIndex(node.id, next);
         return;
       }
     };

@@ -7,10 +7,10 @@
 // clipboard, survives node switches), delete, and are draggable onto any
 // TagField/box (mime `application/x-ideoboard-tag`, data = bare name).
 // ───────────────────────────────────────────────────────────────────────────
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import type { PromptTag } from "../../types";
-import { useSceneStore } from "../../state/sceneStore";
+import { useSceneStore, useCurrentNodeLocked } from "../../state/sceneStore";
 import { useUiStore } from "../../state/uiStore";
 import { newId } from "../../util/id";
 import { formatTagLine, isValidTagName, parseTagLine } from "../../services/tags";
@@ -32,9 +32,24 @@ export function TagsPanel() {
   const clearTagSelection = useUiStore((s) => s.clearTagSelection);
   const clipboard = useUiStore((s) => s.clipboard);
   const setClipboard = useUiStore((s) => s.setClipboard);
+  const tagEditRequest = useUiStore((s) => s.tagEditRequest);
+  const clearTagEditRequest = useUiStore((s) => s.clearTagEditRequest);
+  const requestTagEdit = useUiStore((s) => s.requestTagEdit);
+  const locked = useCurrentNodeLocked();
 
-  const [focusId, setFocusId] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+
+  // An external "create tag from selection" request seeds + focuses the new row.
+  // It's read DIRECTLY into the row's props below (not copied into local state)
+  // so the row mounts already seeded on the render it first appears. Clear it
+  // ONLY once the requested tag actually exists in the list — i.e. its seeded row
+  // has rendered/mounted (child effects run before this parent effect) — so the
+  // request is never consumed before the row that needs it has mounted.
+  useEffect(() => {
+    if (tagEditRequest && tags.some((t) => t.id === tagEditRequest.id)) {
+      clearTagEditRequest();
+    }
+  }, [tagEditRequest, tags, clearTagEditRequest]);
 
   // Names appearing more than once → flagged on every offending row.
   const nameCount = new Map<string, number>();
@@ -42,9 +57,12 @@ export function TagsPanel() {
 
   const handleAdd = () => {
     const id = newId();
-    addTag({ id, name: "", body: "" });
+    // Seed the new row "#" with the caret right after it (same flow as "create
+    // tag from selection", just with an empty body). Request BEFORE addTag so
+    // it's in place on the render the new row first mounts.
+    requestTagEdit(id, true);
     setSelectedTags([id]);
-    setFocusId(id);
+    addTag({ id, name: "", body: "" });
   };
 
   const handleCopy = () => {
@@ -109,13 +127,19 @@ export function TagsPanel() {
         <Button
           variant="ghost"
           className="px-2 py-1 text-xs"
-          disabled={clipboard?.kind !== "tags"}
+          disabled={clipboard?.kind !== "tags" || locked}
           onClick={handlePaste}
           title="Paste tags (Cmd/Ctrl+V)"
         >
           Paste
         </Button>
-        <Button variant="ghost" className="px-2 py-1 text-xs" onClick={handleAdd} title="Add tag">
+        <Button
+          variant="ghost"
+          className="px-2 py-1 text-xs"
+          disabled={locked}
+          onClick={handleAdd}
+          title="Add tag"
+        >
           + Add
         </Button>
       </div>
@@ -124,7 +148,7 @@ export function TagsPanel() {
         ref={panelRef}
         tabIndex={0}
         onKeyDown={onPanelKeyDown}
-        className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5 outline-none"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto outline-none"
       >
         {tags.length === 0 ? (
           <div className="px-2 py-3 text-xs leading-relaxed text-ink-faint">
@@ -140,7 +164,9 @@ export function TagsPanel() {
                 tag={t}
                 selected={selectedTagIds.includes(t.id)}
                 invalid={invalid}
-                autoFocus={t.id === focusId}
+                locked={locked}
+                autoFocus={tagEditRequest?.id === t.id}
+                seedHash={!!tagEditRequest?.seedHash && tagEditRequest.id === t.id}
                 onSelect={(additive) => handleSelect(t.id, additive)}
                 onFocusPanel={() => panelRef.current?.focus()}
                 onCommit={(text) => {
@@ -167,7 +193,11 @@ interface TagRowProps {
   tag: PromptTag;
   selected: boolean;
   invalid: boolean;
+  locked: boolean;
   autoFocus: boolean;
+  // Seed the editor with "# " + body and drop the caret right after the '#'
+  // (a freshly created "tag from selection"), instead of the plain formatted line.
+  seedHash: boolean;
   onSelect: (additive: boolean) => void;
   onFocusPanel: () => void;
   onCommit: (text: string) => void;
@@ -178,29 +208,75 @@ function TagRow({
   tag,
   selected,
   invalid,
+  locked,
   autoFocus,
+  seedHash,
   onSelect,
   onFocusPanel,
   onCommit,
   onDelete,
 }: TagRowProps) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
   // Local text keeps the caret stable while typing; we resync only when the
   // tag changes from OUTSIDE this row (undo/redo/paste) — detected by comparing
   // the formatted forms (our own edits already match, so no spurious resync).
-  const [text, setText] = useState(() => formatTagLine(tag));
+  const [text, setText] = useState(() =>
+    seedHash ? "#" + (tag.body ? " " + tag.body : "") : formatTagLine(tag),
+  );
+  // True while the row still shows its un-typed "# <body>" seed: the resync must
+  // NOT overwrite that with the plain formatted line (the seed intentionally
+  // diverges from formatTagLine). A ref that stays true until the first edit — not
+  // a one-shot — so StrictMode's double-invoked mount effect also skips it.
+  const seededRef = useRef(seedHash);
   useLayoutEffect(() => {
+    if (seededRef.current) return;
     const formatted = formatTagLine(tag);
     if (formatTagLine(parseTagLine(text)) !== formatted) setText(formatted);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tag.name, tag.body]);
 
+  // Seeded rows: focus and put the caret just after the '#' so the user can type
+  // the name. (autoFocus alone would land the caret at the end of the line.)
+  useLayoutEffect(() => {
+    if (!seedHash) return;
+    const el = inputRef.current;
+    if (el) {
+      el.focus();
+      el.setSelectionRange(1, 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Blur any focused text field (its edit is already live via onChange, so this
+  // just commits + drops the caret) and clear any text selection. Browsers may
+  // otherwise leave the row's input focused with text selected after a drag.
+  const clearActiveEdit = () => {
+    const ae = document.activeElement;
+    if (ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement) ae.blur();
+    window.getSelection?.()?.removeAllRanges();
+  };
+
   const onDragStart = (e: ReactDragEvent<HTMLDivElement>) => {
     e.dataTransfer.setData(TAG_MIME, tag.name);
     e.dataTransfer.effectAllowed = "copy";
+    clearActiveEdit(); // entering a drag: commit/clear any active text edit
   };
+
+  // On drop/cancel, re-clear so the release can't (re)start an edit or selection.
+  const onDragEnd = () => clearActiveEdit();
 
   const onRowMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
+    // Drag vs. text-select for THIS press, decided here and applied imperatively
+    // so it's in effect before the browser starts the drag: a press on the
+    // ALREADY-focused input selects text (row not draggable); any other press
+    // (grabber, row, or an unfocused input) starts a tag drag.
+    const onFocusedInput =
+      target === inputRef.current && document.activeElement === inputRef.current;
+    if (rowRef.current) rowRef.current.draggable = !locked && !onFocusedInput;
+
     if (target.closest("input,button")) return; // let the field / delete handle it
     onSelect(e.metaKey || e.ctrlKey || e.shiftKey);
     onFocusPanel();
@@ -208,43 +284,75 @@ function TagRow({
 
   return (
     <div
-      draggable
+      ref={rowRef}
       onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       onMouseDown={onRowMouseDown}
-      className={`group flex items-center gap-1 rounded-md border px-1 py-0.5 ${
+      className={`group relative flex items-center border py-0.5 ${
         selected ? "border-accent bg-accent-soft/40" : "border-transparent hover:bg-surface-2"
       }`}
     >
       <span
-        className="cursor-grab select-none px-0.5 text-ink-faint"
+        className={`select-none pl-[2px] pr-1 text-ink-faint ${locked ? "" : "cursor-grab"}`}
         title="Drag onto a prompt field or box to reference this tag"
       >
         ⋮⋮
       </span>
       <input
+        ref={inputRef}
         type="text"
         value={text}
         autoFocus={autoFocus}
         spellCheck={false}
+        disabled={locked}
         placeholder="#name body"
         onFocus={() => onSelect(false)}
         onChange={(e) => {
           const v = e.currentTarget.value;
+          seededRef.current = false; // user is editing → resume normal resync
           setText(v);
           onCommit(v);
         }}
-        className={`min-w-0 flex-1 bg-transparent px-1 py-0.5 text-sm outline-none placeholder:text-ink-faint ${
+        onKeyDown={(e) => {
+          // Escape commits the current edit (it's already live via onChange) by
+          // ending the session — blur. Stop it bubbling to selection / global
+          // Escape handlers so it doesn't also clear the selection, etc.
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            e.currentTarget.blur();
+          }
+        }}
+        className={`min-w-0 flex-1 bg-transparent pr-1 py-0.5 text-[10px] outline-none placeholder:text-ink-faint disabled:opacity-60 ${
           invalid ? "text-danger" : "text-ink"
         }`}
       />
-      <button
-        type="button"
-        title="Delete tag"
-        onClick={onDelete}
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-faint opacity-0 transition hover:bg-surface-3 hover:text-danger group-hover:opacity-100"
-      >
-        ✕
-      </button>
+      {/* Drawn on top of the input (absolute, flush right) so the text entry keeps
+          the row's full width; appears on row hover. */}
+      {!locked && (
+        <button
+          type="button"
+          title="Delete tag"
+          onClick={onDelete}
+          className="absolute inset-y-0 right-0 flex w-5 items-center justify-center bg-surface-2 text-ink-faint opacity-0 transition hover:bg-surface-3 hover:text-danger group-hover:opacity-100"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-3 w-3"
+            aria-hidden="true"
+          >
+            <path d="M3 6h18" />
+            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            <path d="M10 11v6M14 11v6" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }

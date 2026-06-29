@@ -30,6 +30,10 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* The app is a fixed full-height shell; the page itself never scrolls (kills the
+     rubber-band bounce). Scrolling only happens inside widgets with overflow-auto. */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
@@ -39,6 +43,16 @@ body {
   font-size: 14px;
   overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
+  /* App-level text selection is disabled; it's re-enabled only inside fields. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 * {
@@ -61,4 +75,25 @@ body {
 /* React Flow dark surface */
 .react-flow {
   --xy-background-color: var(--color-surface-0);
+}
+
+/* Zoom/fit controls (bottom-left): light-grey buttons with dark icons so they're
+   legible on the dark canvas (default inherits near-white ink → white-on-white). */
+.react-flow__controls {
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+.react-flow__controls-button {
+  background: #d0d0d6;
+  border-bottom: 1px solid #b4b4bc;
+}
+.react-flow__controls-button:hover {
+  background: #bcbcc4;
+}
+.react-flow__controls-button svg {
+  fill: #1c1c21;
+}
+
+/* Minimap (bottom-right): light-grey panel; node dots use the theme palette. */
+.react-flow__minimap {
+  background-color: #d0d0d6;
 }

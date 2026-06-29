@@ -36,7 +36,7 @@
 
 import type { GraphNode, ID } from "../types";
 
-const COL_SPACING = 280;
+const COL_SPACING = 200;
 const LANE_SPACING = 200;
 
 /** Deterministic child ordering: earliest createdAt first, id as tiebreak. */

@@ -66,7 +66,7 @@ export function promptToV4Json(prompt: StructuredPrompt): V4JsonPrompt {
     const style: V4StyleDescription = dropUndefined({
       aesthetics: expand(s.aesthetics, tags),
       lighting: expand(s.lighting, tags),
-      medium: s.medium,
+      medium: expand(s.medium, tags),
       art_style: expand(s.artStyle, tags),
       photo: expand(s.photo, tags),
       color_palette: s.colorPalette?.length

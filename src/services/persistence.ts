@@ -14,10 +14,19 @@ const save = debounce(() => {
 }, 600);
 
 async function persistNow(): Promise<void> {
-  const scene = useSceneStore.getState().scene;
+  const { scene, draft } = useSceneStore.getState();
   if (!scene) return;
   const viewport = useUiStore.getState().viewport;
-  const toSave = { ...scene, viewport, updatedAt: Date.now() };
+  // Persist the working draft too, so uncommitted edits (drawn boxes, typed text)
+  // survive reload. Stamp it with the node it derives from so setScene can reject
+  // a mismatched draft. setScene restores it on load.
+  const toSave = {
+    ...scene,
+    viewport,
+    draft: draft ?? undefined,
+    draftNodeId: draft ? scene.currentNodeId : undefined,
+    updatedAt: Date.now(),
+  };
   await saveScene(toSave);
   await useScenesStore.getState().refresh();
 }

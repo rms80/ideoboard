@@ -43,7 +43,7 @@ export function TopBar() {
   };
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-3">
+    <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface-3 px-3">
       <div className="flex items-center gap-1.5 pr-2 font-semibold tracking-tight text-ink">
         <span className="text-accent">◈</span> Ideoboard
       </div>
@@ -98,7 +98,7 @@ export function TopBar() {
       <div className="flex-1" />
 
       <Button onClick={toggleViewMode}>
-        {viewMode === "graph" ? "Focus view" : "Graph view"}
+        {viewMode === "graph" ? "Focus" : "Graph"}
       </Button>
       <IconButton title="Settings" onClick={openSettings}>
         ⚙

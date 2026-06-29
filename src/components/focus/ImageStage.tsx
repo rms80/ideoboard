@@ -1,24 +1,23 @@
-import type { CSSProperties } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useSceneStore } from "../../state/sceneStore";
 import { useGenerationStore } from "../../state/generationStore";
 import { useUiStore } from "../../state/uiStore";
-import type { BoxTool } from "../../state/uiStore";
 import { useObjectUrl } from "../../hooks/useObjectUrl";
 import { Button } from "../common/ui";
 import { BoxLayer } from "./BoxLayer";
 
-const BOX_TOOLS: { tool: BoxTool; label: string }[] = [
-  { tool: "select", label: "Select" },
-  { tool: "text", label: "+Text" },
-  { tool: "obj", label: "+Object" },
-];
-
-/** Derive a CSS aspect-ratio style from a "WxH" resolution for the empty draw surface. */
-function emptyAspectStyle(resolution: string | undefined): CSSProperties {
+/** Largest "WxH"-aspect rectangle that fits inside cw×ch (the contain fit, upscaled). */
+function fitRect(
+  resolution: string | undefined,
+  cw: number,
+  ch: number
+): { width: number; height: number } | null {
+  if (cw <= 0 || ch <= 0) return null;
   const [w, h] = (resolution ?? "").split("x").map(Number);
-  const ratio = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? w / h : 1;
-  const primary = ratio >= 1 ? { width: "min(100%, 70vh)" } : { height: "min(100%, 70vh)" };
-  return { aspectRatio: String(ratio), ...primary };
+  const ar = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? w / h : 1;
+  const containerAr = cw / ch;
+  const r = ar > containerAr ? { width: cw, height: cw / ar } : { width: ch * ar, height: ch };
+  return { width: Math.round(r.width), height: Math.round(r.height) };
 }
 
 export function ImageStage() {
@@ -33,52 +32,55 @@ export function ImageStage() {
   const error = useGenerationStore((s) => (node ? s.errors[node.id] : undefined));
   const clearError = useGenerationStore((s) => s.clearError);
   const regenerate = useGenerationStore((s) => s.regenerate);
+  const showImage = useUiStore((s) => s.showImage);
 
-  const boxTool = useUiStore((s) => s.boxTool);
-  const setBoxTool = useUiStore((s) => s.setBoxTool);
+  // Measure the viewport so the image (and the box overlay) can fill it edge-to-edge
+  // at the right aspect ratio. The wrapper is sized to the displayed image rect so
+  // BoxLayer (inset-0) lines up exactly with the pixels.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const fit = fitRect(result?.resolution ?? resolution, size.w, size.h);
+  // The image rect within the container (centered). BoxLayer's pointer surface spans
+  // the whole container but maps coordinates to this rect.
+  const imageBox = fit
+    ? {
+        x: Math.round((size.w - fit.width) / 2),
+        y: Math.round((size.h - fit.height) / 2),
+        w: fit.width,
+        h: fit.height,
+      }
+    : null;
 
   return (
-    <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-0">
-      {/* Box tool toolbar */}
-      <div className="absolute left-2 top-2 z-20 flex gap-1 rounded-md border border-border bg-surface-2/90 p-1 backdrop-blur">
-        {BOX_TOOLS.map(({ tool, label }) => (
-          <button
-            key={tool}
-            type="button"
-            onClick={() => setBoxTool(tool)}
-            className={`rounded px-2 py-1 text-xs font-medium transition ${
-              boxTool === tool
-                ? "bg-accent text-white"
-                : "text-ink-dim hover:bg-surface-3 hover:text-ink"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {url ? (
-        <div className="relative max-h-full max-w-full">
-          <img
-            src={url}
-            alt={result?.promptSnapshot.highLevelDescription || "result"}
-            className="block max-h-full max-w-full select-none object-contain"
-            draggable={false}
-          />
-          <BoxLayer />
-        </div>
-      ) : (
+    <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden bg-surface-0">
+      {imageBox && (
         <div
-          className="relative max-h-full max-w-full rounded border border-dashed border-border/60 bg-surface-0"
-          style={emptyAspectStyle(resolution)}
+          className="absolute"
+          style={{ left: imageBox.x, top: imageBox.y, width: imageBox.w, height: imageBox.h }}
         >
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-ink-faint">
-            <div className="text-4xl">◇</div>
-            <div className="text-sm">No image yet — write a prompt and Generate.</div>
-          </div>
-          <BoxLayer />
+          {url && showImage ? (
+            <img
+              src={url}
+              alt={result?.promptSnapshot.highLevelDescription || "result"}
+              className="block h-full w-full select-none object-contain"
+              draggable={false}
+            />
+          ) : (
+            <div className="h-full w-full rounded border border-dashed border-border/50 bg-surface-0" />
+          )}
         </div>
       )}
+      <BoxLayer imageBox={imageBox} />
 
       {status === "generating" && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40 backdrop-blur-sm">

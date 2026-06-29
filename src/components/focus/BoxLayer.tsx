@@ -1,38 +1,76 @@
 // ───────────────────────────────────────────────────────────────────────────
-// BoxLayer — the absolute overlay that exactly covers the rendered image rect
-// (its parent wrapper in ImageStage). It is the 0–1000 normalized canvas:
-//   • box → CSS %: left = xMin/10%, top = yMin/10%, width = (xMax-xMin)/10%, …
-//     (per-axis %, so non-square images map correctly, matching Ideogram).
-//   • pointer → normalized: nx = clamp((clientX - rect.left)/rect.width*1000, 0, 1000)
-//     using the overlay's getBoundingClientRect (captured at gesture start).
+// BoxLayer — the canvas overlay for the focus image. Its pointer surface spans
+// the ENTIRE middle viewport (the ImageStage container), but box coordinates map
+// to the rendered image rect: the boxes/preview render inside an inner element
+// sized/positioned to `imageBox` (the centered image), and pointer positions are
+// normalized against that inner rect:
+//   nx = ((clientX - imageRect.left) / imageRect.width) * 1000   (NOT clamped —
+//   the letterbox area is part of the canvas, so values can go <0 or >1000).
 //
-// Responsibilities: render BoxItems, draw new boxes (text/obj tools), clear /
-// marquee-select (select tool), host the BoxInspector, and scoped keyboard
-// handling (delete / copy / paste / arrow-nudge) — focus view only, never while
-// editing a text field.
+// Modeless interaction (no tool palette) — BoxItems are non-interactive, so this
+// overlay receives every pointer event and hit-tests:
+//   • hover a border / a selected box's interior → grab cursor (move affordance).
+//   • click (no drag)            → select the box under the cursor (border first,
+//                                  then containment); empty / letterbox → clear.
+//   • drag FROM a border, or inside a selected box → move (the whole selection).
+//   • drag on a resize handle    → resize that box.
+//   • drag inside the image      → draw a new box (obj by default; press `t` mid-
+//                                  draw to toggle text/obj). Preview is orange.
+//   • drag in the letterbox, or shift+drag → marquee-select (adds to selection);
+//                                  the marquee may start/extend/end outside the image.
+//   • drop a tag (#name)         → append it to the desc of the box under the cursor.
+// Also: scoped keyboard (delete / copy / paste / arrow-nudge) — focus view only,
+// never while editing a text field. The selected box is edited in BoxPanel.
 // ───────────────────────────────────────────────────────────────────────────
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-import type { PromptBox } from "../../types";
-import { useSceneStore } from "../../state/sceneStore";
+import type { CSSProperties, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { BoxKind, ID, PromptBox } from "../../types";
+import { useSceneStore, useCurrentNodeLocked } from "../../state/sceneStore";
 import { useUiStore } from "../../state/uiStore";
 import { newId } from "../../util/id";
 import { clamp } from "../../util/misc";
-import { BoxItem } from "./BoxItem";
-import { BoxInspector } from "./BoxInspector";
+import { BoxItem, BoxHandles, BoxLabel, HANDLES, type Edges } from "./BoxItem";
 
 const EMPTY_BOXES: PromptBox[] = [];
-/** A fresh draw must be at least this big (normalized) to count — ignores stray clicks. */
-const DRAW_MIN = 20;
-/** A marquee must drag at least this far to be a marquee rather than a click. */
-const MARQUEE_MIN = 8;
+const TAG_MIME = "application/x-ideoboard-tag";
+/** Pointer travel (normalized) before a press becomes a drag rather than a click. */
+const DRAG_START = 6;
+/** A fresh draw must be at least this big (normalized) on both axes to count. */
+const DRAW_MIN = 12;
+/** Minimum box extent (normalized) preserved while resizing. */
+const MIN_SIZE = 10;
+/** Hit-test tolerances in CSS px (converted to normalized via the image rect). */
+const BORDER_TOL_PX = 6;
+const HANDLE_TOL_PX = 10;
+/** New-box draw preview (semitransparent orange, object-style solid outline). */
+const DRAW_BORDER = "rgba(249,115,22,0.95)";
+const DRAW_FILL = "rgba(249,115,22,0.18)";
+/** Black halo so the draw preview reads over busy images (matches BoxItem). */
+const DRAW_HALO = "0 0 0 2px rgba(0,0,0,0.85), inset 0 0 0 2px rgba(0,0,0,0.85)";
 
-interface DragState {
-  mode: "draw" | "marquee";
-  sx: number;
-  sy: number;
-  cx: number;
-  cy: number;
+type BBox = { xMin: number; yMin: number; xMax: number; yMax: number };
+
+export interface BoxLayerProps {
+  /** The rendered image rect within the container (px), or null until measured. */
+  imageBox: { x: number; y: number; w: number; h: number } | null;
+}
+
+interface Gesture {
+  rect: DOMRect;
+  startNx: number;
+  startNy: number;
+  shift: boolean;
+  alt: boolean; // alt/option held at press → a move-drag duplicates the selection
+  outside: boolean; // press began outside the image (letterbox) → drag = marquee
+  dragging: boolean;
+  mode: "idle" | "move" | "draw" | "marquee" | "resize";
+  boxHitId: ID | null; // box under the press (for click-select)
+  moveHitId: ID | null; // box a drag would move (any border, or a selected box's interior)
+  drawKind: BoxKind; // kind of the box being drawn (toggled by `t`)
+  origBoxes: { id: ID; bbox: BBox }[]; // snapshot for move
+  resizeId: ID | null;
+  edges: Edges;
+  resizeOrig: BBox | null;
 }
 
 function isEditable(el: EventTarget | null): boolean {
@@ -46,31 +84,122 @@ function isEditable(el: EventTarget | null): boolean {
   );
 }
 
-export function BoxLayer() {
+function rectStyle(aX: number, aY: number, bX: number, bY: number): CSSProperties {
+  const xMin = Math.min(aX, bX);
+  const yMin = Math.min(aY, bY);
+  const xMax = Math.max(aX, bX);
+  const yMax = Math.max(aY, bY);
+  return {
+    left: `${xMin / 10}%`,
+    top: `${yMin / 10}%`,
+    width: `${(xMax - xMin) / 10}%`,
+    height: `${(yMax - yMin) / 10}%`,
+  };
+}
+
+export function BoxLayer({ imageBox }: BoxLayerProps) {
   const boxes = useSceneStore((s) => s.draft?.boxes ?? EMPTY_BOXES);
   const addBox = useSceneStore((s) => s.addBox);
-  const boxTool = useUiStore((s) => s.boxTool);
-  const setBoxTool = useUiStore((s) => s.setBoxTool);
+  const addBoxes = useSceneStore((s) => s.addBoxes);
+  const updateBox = useSceneStore((s) => s.updateBox);
   const selectedBoxIds = useUiStore((s) => s.selectedBoxIds);
-  const inspectorBoxId = useUiStore((s) => s.inspectorBoxId);
   const setSelectedBoxes = useUiStore((s) => s.setSelectedBoxes);
+  const toggleBoxSelection = useUiStore((s) => s.toggleBoxSelection);
   const clearBoxSelection = useUiStore((s) => s.clearBoxSelection);
-  const setInspectorBox = useUiStore((s) => s.setInspectorBox);
+  const focusBoxField = useUiStore((s) => s.focusBoxField);
+  const setPendingBox = useUiStore((s) => s.setPendingBox);
+  const showPrompts = useUiStore((s) => s.showPrompts);
+  // Locked nodes (already have an image) are read-only: selection/marquee still
+  // work for inspection, but drawing / moving / resizing boxes is disabled.
+  const locked = useCurrentNodeLocked();
 
-  const overlayRef = useRef<HTMLDivElement | null>(null);
-  const dragRect = useRef<DOMRect | null>(null);
-  const [drag, setDrag] = useState<DragState | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null); // container-filling pointer surface
+  const imageRectRef = useRef<HTMLDivElement | null>(null); // sized to the image rect (coord space)
+  const gesture = useRef<Gesture | null>(null);
+  const [preview, setPreview] = useState<{ style: CSSProperties; kind: BoxKind | null } | null>(null);
+  const [dropHoverId, setDropHoverId] = useState<ID | null>(null);
 
-  const getRect = () => overlayRef.current?.getBoundingClientRect() ?? null;
+  // Coordinate conversions use the IMAGE rect (the inner element), so 0–1000 maps to
+  // the image even though the pointer surface is the whole viewport.
+  const getRect = () => imageRectRef.current?.getBoundingClientRect() ?? null;
+  const setCursor = (c: string) => {
+    if (overlayRef.current) overlayRef.current.style.cursor = c;
+  };
 
+  // NOT clamped — the letterbox is canvas too (values may be <0 or >1000).
   const toNorm = (clientX: number, clientY: number, rect: DOMRect) => ({
-    nx: clamp(((clientX - rect.left) / rect.width) * 1000, 0, 1000),
-    ny: clamp(((clientY - rect.top) / rect.height) * 1000, 0, 1000),
+    nx: ((clientX - rect.left) / rect.width) * 1000,
+    ny: ((clientY - rect.top) / rect.height) * 1000,
   });
+  const isOutside = (nx: number, ny: number) => nx < 0 || nx > 1000 || ny < 0 || ny > 1000;
+
+  // ── Hit testing (topmost box wins → iterate render order in reverse) ─────────
+  const hitHandle = (
+    nx: number,
+    ny: number,
+    rect: DOMRect
+  ): { id: ID; edges: Edges; cursor: string } | null => {
+    if (!selectedBoxIds.length) return null;
+    const tolX = (HANDLE_TOL_PX / rect.width) * 1000;
+    const tolY = (HANDLE_TOL_PX / rect.height) * 1000;
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      const b = boxes[i];
+      if (!selectedBoxIds.includes(b.id)) continue;
+      const w = b.bbox.xMax - b.bbox.xMin;
+      const h = b.bbox.yMax - b.bbox.yMin;
+      for (const handle of HANDLES) {
+        const hx = b.bbox.xMin + (handle.x / 100) * w;
+        const hy = b.bbox.yMin + (handle.y / 100) * h;
+        if (Math.abs(nx - hx) <= tolX && Math.abs(ny - hy) <= tolY) {
+          return { id: b.id, edges: handle.edges, cursor: handle.cursor };
+        }
+      }
+    }
+    return null;
+  };
+
+  // Border-only hit (the part that would also drive a move). Topmost first.
+  const hitBorder = (nx: number, ny: number, rect: DOMRect): ID | null => {
+    const tolX = (BORDER_TOL_PX / rect.width) * 1000;
+    const tolY = (BORDER_TOL_PX / rect.height) * 1000;
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      const b = boxes[i];
+      const spanX = nx >= b.bbox.xMin - tolX && nx <= b.bbox.xMax + tolX;
+      const spanY = ny >= b.bbox.yMin - tolY && ny <= b.bbox.yMax + tolY;
+      const nearLeft = Math.abs(nx - b.bbox.xMin) <= tolX && spanY;
+      const nearRight = Math.abs(nx - b.bbox.xMax) <= tolX && spanY;
+      const nearTop = Math.abs(ny - b.bbox.yMin) <= tolY && spanX;
+      const nearBottom = Math.abs(ny - b.bbox.yMax) <= tolY && spanX;
+      if (nearLeft || nearRight || nearTop || nearBottom) return b.id;
+    }
+    return null;
+  };
+
+  // Select hit: a near-edge hit beats a box that merely contains the point.
+  const hitBox = (nx: number, ny: number, rect: DOMRect): ID | null => {
+    const border = hitBorder(nx, ny, rect);
+    if (border) return border;
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      const b = boxes[i];
+      if (nx >= b.bbox.xMin && nx <= b.bbox.xMax && ny >= b.bbox.yMin && ny <= b.bbox.yMax)
+        return b.id;
+    }
+    return null;
+  };
 
   // ── Scoped keyboard (focus view, not while editing text) ────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // `t` toggles the kind of the box being actively drawn (works regardless of
+      // focus, since a draw is in progress and gated tightly on the live gesture).
+      const g = gesture.current;
+      if ((e.key === "t" || e.key === "T") && g?.dragging && g.mode === "draw") {
+        e.preventDefault();
+        g.drawKind = g.drawKind === "text" ? "obj" : "text";
+        setPreview((p) => (p ? { ...p, kind: g.drawKind } : p));
+        return;
+      }
+
       if (useUiStore.getState().viewMode !== "focus") return;
       if (isEditable(document.activeElement)) return;
 
@@ -80,11 +209,25 @@ export function BoxLayer() {
       const mod = e.metaKey || e.ctrlKey;
       const key = e.key;
 
+      if (key === "Escape" && sel.length) {
+        e.preventDefault();
+        ui.clearBoxSelection();
+        return;
+      }
+
+      // `e` / `d` focus the selected box's fields in the BoxPanel:
+      //   e → primary entry (Text for a text box, Label for an object box)
+      //   d → Description (either kind)
+      if ((key === "e" || key === "d") && !mod && !e.altKey && !e.shiftKey && ui.inspectorBoxId) {
+        e.preventDefault();
+        ui.focusBoxField(key === "e" ? "primary" : "desc");
+        return;
+      }
+
       if ((key === "Delete" || key === "Backspace") && sel.length) {
         e.preventDefault();
         scene.removeBoxes(sel);
         ui.clearBoxSelection();
-        ui.setInspectorBox(null);
         return;
       }
 
@@ -140,122 +283,337 @@ export function BoxLayer() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // ── Empty-area pointer gestures: draw (text/obj) / marquee+clear (select) ────
+  // ── Pointer gestures ─────────────────────────────────────────────────────────
   const onPointerDown = (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
-    if (e.target !== overlayRef.current) return; // only the bare overlay, not a child
     const rect = getRect();
     if (!rect) return;
-    dragRect.current = rect;
     const { nx, ny } = toNorm(e.clientX, e.clientY, rect);
+    const shift = e.shiftKey;
+    const alt = e.altKey;
+    const outside = isOutside(nx, ny);
     overlayRef.current?.setPointerCapture(e.pointerId);
-    if (boxTool === "select") {
-      setInspectorBox(null);
-      setDrag({ mode: "marquee", sx: nx, sy: ny, cx: nx, cy: ny });
-    } else {
-      setDrag({ mode: "draw", sx: nx, sy: ny, cx: nx, cy: ny });
+    setPendingBox(null); // any new gesture cancels a just-drawn box's revert window
+
+    // Resize handle takes precedence (selected box, never with shift / from
+    // outside, never on a locked node).
+    const rz = !shift && !outside && !locked ? hitHandle(nx, ny, rect) : null;
+    if (rz) {
+      const b = boxes.find((x) => x.id === rz.id);
+      setCursor(rz.cursor);
+      gesture.current = {
+        rect,
+        startNx: nx,
+        startNy: ny,
+        shift: false,
+        alt: false,
+        outside: false,
+        dragging: false,
+        mode: "resize",
+        boxHitId: rz.id,
+        moveHitId: null,
+        drawKind: "obj",
+        origBoxes: [],
+        resizeId: rz.id,
+        edges: rz.edges,
+        resizeOrig: b ? { ...b.bbox } : null,
+      };
+      return;
+    }
+
+    // A drag moves a box if it starts on any border, or inside an already-selected
+    // box; in the letterbox or with shift it marquees; otherwise it draws.
+    const boxHitId = hitBox(nx, ny, rect);
+    const moveHitId =
+      shift || outside || locked
+        ? null
+        : (hitBorder(nx, ny, rect) ?? (boxHitId && selectedBoxIds.includes(boxHitId) ? boxHitId : null));
+    gesture.current = {
+      rect,
+      startNx: nx,
+      startNy: ny,
+      shift,
+      alt,
+      outside,
+      dragging: false,
+      mode: "idle",
+      boxHitId,
+      moveHitId,
+      drawKind: "obj",
+      origBoxes: [],
+      resizeId: null,
+      edges: {},
+      resizeOrig: null,
+    };
+  };
+
+  const applyMove = (g: Gesture, nx: number, ny: number) => {
+    let minDx = -Infinity;
+    let maxDx = Infinity;
+    let minDy = -Infinity;
+    let maxDy = Infinity;
+    for (const o of g.origBoxes) {
+      minDx = Math.max(minDx, -o.bbox.xMin);
+      maxDx = Math.min(maxDx, 1000 - o.bbox.xMax);
+      minDy = Math.max(minDy, -o.bbox.yMin);
+      maxDy = Math.min(maxDy, 1000 - o.bbox.yMax);
+    }
+    const dx = clamp(nx - g.startNx, minDx, maxDx);
+    const dy = clamp(ny - g.startNy, minDy, maxDy);
+    for (const o of g.origBoxes) {
+      updateBox(o.id, (b) => {
+        b.bbox = {
+          xMin: o.bbox.xMin + dx,
+          yMin: o.bbox.yMin + dy,
+          xMax: o.bbox.xMax + dx,
+          yMax: o.bbox.yMax + dy,
+        };
+      });
     }
   };
 
+  const applyResize = (g: Gesture, nx: number, ny: number) => {
+    const o = g.resizeOrig;
+    if (!o || !g.resizeId) return;
+    const dx = nx - g.startNx;
+    const dy = ny - g.startNy;
+    let xMin = o.xMin;
+    let yMin = o.yMin;
+    let xMax = o.xMax;
+    let yMax = o.yMax;
+    if (g.edges.left) xMin = clamp(o.xMin + dx, 0, o.xMax - MIN_SIZE);
+    if (g.edges.right) xMax = clamp(o.xMax + dx, o.xMin + MIN_SIZE, 1000);
+    if (g.edges.top) yMin = clamp(o.yMin + dy, 0, o.yMax - MIN_SIZE);
+    if (g.edges.bottom) yMax = clamp(o.yMax + dy, o.yMin + MIN_SIZE, 1000);
+    updateBox(g.resizeId, (b) => {
+      b.bbox = { xMin, yMin, xMax, yMax };
+    });
+  };
+
   const onPointerMove = (e: ReactPointerEvent) => {
-    if (!drag) return;
-    const rect = dragRect.current;
-    if (!rect) return;
-    const { nx, ny } = toNorm(e.clientX, e.clientY, rect);
-    setDrag((d) => (d ? { ...d, cx: nx, cy: ny } : d));
+    const g = gesture.current;
+
+    // No active gesture → hover affordance (grab on a border / selected interior).
+    if (!g) {
+      const rect = getRect();
+      if (!rect) return;
+      const { nx, ny } = toNorm(e.clientX, e.clientY, rect);
+      // Locked: no draw/move affordance — just show a selectable cursor over boxes.
+      if (locked) {
+        setCursor(hitBox(nx, ny, rect) ? "pointer" : "default");
+        return;
+      }
+      if (e.shiftKey || isOutside(nx, ny)) {
+        setCursor("crosshair");
+        return;
+      }
+      const handle = hitHandle(nx, ny, rect);
+      if (handle) {
+        setCursor(handle.cursor);
+        return;
+      }
+      const boxId = hitBox(nx, ny, rect);
+      const movable = !!boxId && (hitBorder(nx, ny, rect) === boxId || selectedBoxIds.includes(boxId));
+      setCursor(movable ? "grab" : "crosshair");
+      return;
+    }
+
+    const { nx, ny } = toNorm(e.clientX, e.clientY, g.rect);
+
+    if (!g.dragging) {
+      if (Math.abs(nx - g.startNx) < DRAG_START && Math.abs(ny - g.startNy) < DRAG_START) return;
+      g.dragging = true;
+      if (g.mode !== "resize") {
+        // Locked nodes can only marquee-select (no draw / move).
+        g.mode = g.shift || g.outside || locked ? "marquee" : g.moveHitId ? "move" : "draw";
+        if (g.mode === "move") {
+          const hitId = g.moveHitId!;
+          const inSel = selectedBoxIds.includes(hitId);
+          const groupIds = inSel ? selectedBoxIds : [hitId];
+          if (g.alt) {
+            // Alt-drag: duplicate the group, select the copies, and drag those
+            // (originals stay put). Copies start co-located, so the drag separates them.
+            const dupes = boxes
+              .filter((b) => groupIds.includes(b.id))
+              .map((b) => ({ ...structuredClone(b), id: newId() }));
+            addBoxes(dupes);
+            setSelectedBoxes(dupes.map((d) => d.id));
+            g.origBoxes = dupes.map((d) => ({ id: d.id, bbox: { ...d.bbox } }));
+          } else {
+            if (!inSel) setSelectedBoxes([hitId]);
+            g.origBoxes = boxes
+              .filter((b) => groupIds.includes(b.id))
+              .map((b) => ({ id: b.id, bbox: { ...b.bbox } }));
+          }
+          setCursor("grabbing");
+        } else if (g.mode === "draw") {
+          g.drawKind = "obj";
+        }
+      }
+    }
+
+    if (g.mode === "move") applyMove(g, nx, ny);
+    else if (g.mode === "resize") applyResize(g, nx, ny);
+    else if (g.mode === "draw") {
+      // New boxes live inside the image → clamp the preview to 0–1000.
+      const sx = clamp(g.startNx, 0, 1000);
+      const sy = clamp(g.startNy, 0, 1000);
+      setPreview({ style: rectStyle(sx, sy, clamp(nx, 0, 1000), clamp(ny, 0, 1000)), kind: g.drawKind });
+    } else if (g.mode === "marquee")
+      // Marquee may spill into the letterbox (unclamped) — the inner rect doesn't clip.
+      setPreview({ style: rectStyle(g.startNx, g.startNy, nx, ny), kind: null });
   };
 
   const onPointerUp = (e: ReactPointerEvent) => {
-    if (!drag) return;
+    const g = gesture.current;
+    if (!g) return;
     try {
       overlayRef.current?.releasePointerCapture(e.pointerId);
     } catch {
       /* capture may already be gone */
     }
-    const xMin = Math.min(drag.sx, drag.cx);
-    const yMin = Math.min(drag.sy, drag.cy);
-    const xMax = Math.max(drag.sx, drag.cx);
-    const yMax = Math.max(drag.sy, drag.cy);
-    const w = xMax - xMin;
-    const h = yMax - yMin;
+    const { nx, ny } = toNorm(e.clientX, e.clientY, g.rect);
 
-    if (drag.mode === "draw") {
-      if (w >= DRAW_MIN && h >= DRAW_MIN) {
-        const kind = boxTool === "text" ? "text" : "obj";
+    if (!g.dragging) {
+      // Click: select via hit-test (handle-clicks do nothing). Empty / letterbox clears.
+      if (g.mode !== "resize") {
+        if (g.shift) {
+          if (g.boxHitId) toggleBoxSelection(g.boxHitId, true);
+        } else if (g.boxHitId) {
+          setSelectedBoxes([g.boxHitId]);
+        } else {
+          clearBoxSelection();
+        }
+      }
+    } else if (g.mode === "draw") {
+      const sx = clamp(g.startNx, 0, 1000);
+      const sy = clamp(g.startNy, 0, 1000);
+      const ex = clamp(nx, 0, 1000);
+      const ey = clamp(ny, 0, 1000);
+      const xMin = Math.min(sx, ex);
+      const yMin = Math.min(sy, ey);
+      const xMax = Math.max(sx, ex);
+      const yMax = Math.max(sy, ey);
+      if (xMax - xMin >= DRAW_MIN && yMax - yMin >= DRAW_MIN) {
         const id = newId();
-        addBox({
-          id,
-          kind,
-          desc: "",
-          text: kind === "text" ? "" : undefined,
-          bbox: { xMin, yMin, xMax, yMax },
-          color: undefined,
-        });
+        const bbox = { xMin, yMin, xMax, yMax };
+        addBox(
+          g.drawKind === "text"
+            ? { id, kind: "text", text: "", desc: "", bbox }
+            : { id, kind: "obj", desc: "", bbox }
+        );
         setSelectedBoxes([id]);
-        setInspectorBox(id);
-        setBoxTool("select");
+        setPendingBox(id);
+        focusBoxField("draw");
       }
-    } else {
-      // marquee: a real drag selects intersecting boxes; a click clears.
-      if (w >= MARQUEE_MIN || h >= MARQUEE_MIN) {
-        const hit = boxes
-          .filter(
-            (b) =>
-              !(b.bbox.xMax < xMin || b.bbox.xMin > xMax || b.bbox.yMax < yMin || b.bbox.yMin > yMax)
-          )
-          .map((b) => b.id);
-        setSelectedBoxes(hit);
-      } else {
-        clearBoxSelection();
-        setInspectorBox(null);
-      }
+    } else if (g.mode === "marquee") {
+      const xMin = Math.min(g.startNx, nx);
+      const yMin = Math.min(g.startNy, ny);
+      const xMax = Math.max(g.startNx, nx);
+      const yMax = Math.max(g.startNy, ny);
+      const hit = boxes
+        .filter(
+          (b) =>
+            !(b.bbox.xMax < xMin || b.bbox.xMin > xMax || b.bbox.yMax < yMin || b.bbox.yMin > yMax)
+        )
+        .map((b) => b.id);
+      setSelectedBoxes(Array.from(new Set([...selectedBoxIds, ...hit])));
     }
-    dragRect.current = null;
-    setDrag(null);
+    // move / resize were applied live — nothing to finalize.
+
+    gesture.current = null;
+    setPreview(null);
+    setCursor(locked ? "default" : "crosshair");
   };
 
-  const previewStyle = (): CSSProperties | null => {
-    if (!drag) return null;
-    const xMin = Math.min(drag.sx, drag.cx);
-    const yMin = Math.min(drag.sy, drag.cy);
-    const xMax = Math.max(drag.sx, drag.cx);
-    const yMax = Math.max(drag.sy, drag.cy);
-    return {
-      left: `${xMin / 10}%`,
-      top: `${yMin / 10}%`,
-      width: `${(xMax - xMin) / 10}%`,
-      height: `${(yMax - yMin) / 10}%`,
-    };
+  // ── Tag drop (drag a #tag from TagsPanel onto a box → append to its desc) ─────
+  const onDragOver = (e: ReactDragEvent) => {
+    if (!Array.from(e.dataTransfer.types).includes(TAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    const rect = getRect();
+    if (!rect) return;
+    const { nx, ny } = toNorm(e.clientX, e.clientY, rect);
+    setDropHoverId(hitBox(nx, ny, rect));
   };
 
-  const preview = previewStyle();
+  const onDragLeave = () => setDropHoverId(null);
+
+  const onDrop = (e: ReactDragEvent) => {
+    const name = e.dataTransfer.getData(TAG_MIME);
+    setDropHoverId(null);
+    if (!name) return;
+    e.preventDefault();
+    const rect = getRect();
+    if (!rect) return;
+    const { nx, ny } = toNorm(e.clientX, e.clientY, rect);
+    const id = hitBox(nx, ny, rect);
+    if (id) updateBox(id, (b) => void (b.desc = (b.desc ? b.desc + " " : "") + "#" + name));
+  };
 
   return (
     <div
       ref={overlayRef}
-      style={{ touchAction: "none" }}
-      className={`absolute inset-0 ${boxTool === "select" ? "cursor-default" : "cursor-crosshair"}`}
+      style={{ touchAction: "none", cursor: locked || !showPrompts ? "default" : "crosshair" }}
+      className="absolute inset-0"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
     >
-      {boxes.map((b) => (
-        <BoxItem key={b.id} box={b} selected={selectedBoxIds.includes(b.id)} getRect={getRect} />
-      ))}
-
-      {preview && (
+      {imageBox && showPrompts && (
         <div
-          style={preview}
-          className={`pointer-events-none absolute border-2 ${
-            drag?.mode === "draw"
-              ? "border-dashed border-accent bg-accent-soft/30"
-              : "border-accent/60 bg-accent/10"
-          }`}
-        />
-      )}
+          ref={imageRectRef}
+          className="pointer-events-none absolute"
+          style={{ left: imageBox.x, top: imageBox.y, width: imageBox.w, height: imageBox.h }}
+        >
+          {boxes.map((b) => (
+            <BoxItem
+              key={b.id}
+              box={b}
+              selected={selectedBoxIds.includes(b.id)}
+              dropHover={dropHoverId === b.id}
+            />
+          ))}
 
-      {inspectorBoxId && <BoxInspector />}
+          {/* Selected box's label on a top layer so an overlapping box can't clip
+              it (rendered regardless of lock — the label must always be visible). */}
+          {boxes
+            .filter((b) => selectedBoxIds.includes(b.id))
+            .map((b) => (
+              <BoxLabel key={`l-${b.id}`} box={b} />
+            ))}
+
+          {/* Resize grips on a top layer (above all boxes); not on locked nodes. */}
+          {!locked &&
+            boxes
+              .filter((b) => selectedBoxIds.includes(b.id))
+              .map((b) => <BoxHandles key={`h-${b.id}`} box={b} />)}
+
+          {preview &&
+            (preview.kind ? (
+              <div
+                style={{
+                  ...preview.style,
+                  borderColor: DRAW_BORDER,
+                  backgroundColor: DRAW_FILL,
+                  boxShadow: DRAW_HALO,
+                }}
+                className={`pointer-events-none absolute border-2 ${
+                  preview.kind === "text" ? "border-dashed" : "border-solid"
+                }`}
+              />
+            ) : (
+              <div
+                style={preview.style}
+                className="pointer-events-none absolute border border-dashed border-accent/70 bg-accent/10"
+              />
+            ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -12,12 +12,10 @@ export type RenderingSpeed = "TURBO" | "DEFAULT" | "QUALITY";
 
 export type BoxKind = "text" | "obj";
 
-export type Medium = "photograph" | "graphic_design";
-
 export interface PromptStyle {
   aesthetics?: string;
   lighting?: string;
-  medium?: Medium;
+  medium?: string;
   artStyle?: string;
   photo?: string;
   colorPalette?: string[]; // hex strings, uppercased on send (≤16)
@@ -27,7 +25,8 @@ export interface PromptStyle {
 export interface PromptBox {
   id: ID;
   kind: BoxKind; // "text" = typographic element, "obj" = visual object
-  text?: string; // literal string (text kind only) — tag-expanded on send
+  text?: string; // literal string (text kind only) — tag-expanded on send + shown in the box
+  label?: string; // obj kind only — display-only name shown centered in the box (not sent)
   desc: string; // sub-prompt / typographic spec — tag-expanded on send
   bbox: { xMin: number; yMin: number; xMax: number; yMax: number }; // 0–1000
   color?: string;
@@ -70,6 +69,11 @@ export interface GraphNode {
   currentResultIndex: number; // which result is "current"
   pos?: { x: number; y: number }; // cached layout (recomputed on structural change)
   createdAt: number;
+  // Free-text label the user types to describe this node's result (status bar).
+  // Personal annotation only — never expanded as #tags or sent to generation.
+  // On spawn, inherited from the parent with a lineage marker appended (#2/#3…
+  // for the primary continuation, A/B/C… for branches).
+  note?: string;
 }
 
 export interface Scene {
@@ -82,6 +86,12 @@ export interface Scene {
   currentNodeId: ID;
   viewport?: { x: number; y: number; zoom: number };
   defaults: { resolution: string; renderingSpeed: RenderingSpeed };
+  // Transient editor draft (uncommitted edits — drawn boxes, typed text, tags).
+  // Persisted so in-progress work survives reload; not part of the committed graph
+  // and overwritten on every save. `draftNodeId` records which node it derives
+  // from so setScene only restores it when it still matches `currentNodeId`.
+  draft?: StructuredPrompt;
+  draftNodeId?: ID;
 }
 
 // ─── Ideogram v4 wire types (derived at send-time, never persisted) ──────────
@@ -89,7 +99,7 @@ export interface Scene {
 export interface V4StyleDescription {
   aesthetics?: string;
   lighting?: string;
-  medium?: Medium;
+  medium?: string;
   art_style?: string;
   photo?: string;
   color_palette?: string[];

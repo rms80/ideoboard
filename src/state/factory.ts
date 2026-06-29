@@ -49,6 +49,9 @@ export function createScene(
 ): Scene {
   const root = createNode(null, createEmptyPrompt(defaults), now);
   root.pos = { x: 0, y: 0 };
+  // Every new scene starts with one example tag fragment so the feature is
+  // discoverable: "#tag1 an example prompt fragment".
+  root.prompt.tags = [{ id: newId(), name: "tag1", body: "an example prompt fragment" }];
   return {
     id: newId(),
     name,

@@ -1,23 +1,26 @@
-import { useSceneStore } from "../../state/sceneStore";
-import { RESOLUTIONS, RENDERING_SPEEDS, type Medium } from "../../types";
+import { useSceneStore, useCurrentNodeLocked } from "../../state/sceneStore";
+import { RESOLUTIONS, RENDERING_SPEEDS } from "../../types";
 import { Field, selectClass } from "../common/ui";
 import { TagField } from "../common/TagField";
 
 // Free-text fields use <TagField> (#-autocomplete, drag-drop, resolved preview);
-// medium/resolution/speed stay plain <select>s.
+// resolution/speed stay plain <select>s. All fields lock (read-only) once the
+// node has a generated image — iterate by spawning a new node instead.
 export function PromptPanel() {
   const draft = useSceneStore((s) => s.draft);
   const editDraft = useSceneStore((s) => s.editDraft);
+  const locked = useCurrentNodeLocked();
   if (!draft) return null;
 
   const style = draft.style ?? {};
   const tags = draft.tags;
 
   return (
-    <div className="flex flex-col gap-3 overflow-y-auto p-3">
-      <Field label="Prompt">
+    <div className="flex flex-col gap-[3px] overflow-y-auto px-1 pt-1 pb-3">
+      <Field>
         <TagField
           multiline
+          disabled={locked}
           tags={tags}
           ariaLabel="Prompt"
           placeholder="Describe the image…"
@@ -26,8 +29,9 @@ export function PromptPanel() {
         />
       </Field>
 
-      <Field label="Background">
+      <Field>
         <TagField
+          disabled={locked}
           tags={tags}
           ariaLabel="Background"
           placeholder="Optional background description"
@@ -36,68 +40,72 @@ export function PromptPanel() {
         />
       </Field>
 
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Medium">
-          <select
-            className={selectClass}
-            value={style.medium ?? ""}
-            onChange={(e) =>
-              editDraft((p) => {
-                p.style ??= {};
-                p.style.medium = (e.target.value || undefined) as Medium | undefined;
-              })
-            }
-          >
-            <option value="">—</option>
-            <option value="photograph">photograph</option>
-            <option value="graphic_design">graphic_design</option>
-          </select>
-        </Field>
-        <Field label="Art style">
-          <TagField
-            tags={tags}
-            ariaLabel="Art style"
-            value={style.artStyle ?? ""}
-            onChange={(v) =>
-              editDraft((p) => {
-                p.style ??= {};
-                p.style.artStyle = v;
-              })
-            }
-          />
-        </Field>
-        <Field label="Aesthetics">
-          <TagField
-            tags={tags}
-            ariaLabel="Aesthetics"
-            value={style.aesthetics ?? ""}
-            onChange={(v) =>
-              editDraft((p) => {
-                p.style ??= {};
-                p.style.aesthetics = v;
-              })
-            }
-          />
-        </Field>
-        <Field label="Lighting">
-          <TagField
-            tags={tags}
-            ariaLabel="Lighting"
-            value={style.lighting ?? ""}
-            onChange={(v) =>
-              editDraft((p) => {
-                p.style ??= {};
-                p.style.lighting = v;
-              })
-            }
-          />
-        </Field>
-      </div>
+      <Field>
+        <TagField
+          disabled={locked}
+          tags={tags}
+          ariaLabel="Medium"
+          placeholder="Medium"
+          value={style.medium ?? ""}
+          onChange={(v) =>
+            editDraft((p) => {
+              p.style ??= {};
+              p.style.medium = v;
+            })
+          }
+        />
+      </Field>
+      <Field>
+        <TagField
+          disabled={locked}
+          tags={tags}
+          ariaLabel="Art style"
+          placeholder="Art style"
+          value={style.artStyle ?? ""}
+          onChange={(v) =>
+            editDraft((p) => {
+              p.style ??= {};
+              p.style.artStyle = v;
+            })
+          }
+        />
+      </Field>
+      <Field>
+        <TagField
+          disabled={locked}
+          tags={tags}
+          ariaLabel="Aesthetics"
+          placeholder="Aesthetics"
+          value={style.aesthetics ?? ""}
+          onChange={(v) =>
+            editDraft((p) => {
+              p.style ??= {};
+              p.style.aesthetics = v;
+            })
+          }
+        />
+      </Field>
+      <Field>
+        <TagField
+          disabled={locked}
+          tags={tags}
+          ariaLabel="Lighting"
+          placeholder="Lighting"
+          value={style.lighting ?? ""}
+          onChange={(v) =>
+            editDraft((p) => {
+              p.style ??= {};
+              p.style.lighting = v;
+            })
+          }
+        />
+      </Field>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Resolution">
+        <Field>
           <select
             className={selectClass}
+            disabled={locked}
             value={draft.resolution}
             onChange={(e) => editDraft((p) => void (p.resolution = e.target.value))}
           >
@@ -108,9 +116,10 @@ export function PromptPanel() {
             ))}
           </select>
         </Field>
-        <Field label="Speed">
+        <Field>
           <select
             className={selectClass}
+            disabled={locked}
             value={draft.renderingSpeed}
             onChange={(e) => editDraft((p) => void (p.renderingSpeed = e.target.value as never))}
           >

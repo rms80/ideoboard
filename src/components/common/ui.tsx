@@ -20,7 +20,7 @@ export function Button({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
   return (
     <button
-      className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed ${VARIANTS[variant]} ${className}`}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-md px-[4px] py-[2px] text-xs font-medium transition disabled:cursor-not-allowed ${VARIANTS[variant]} ${className}`}
       {...rest}
     >
       {children}
@@ -43,17 +43,19 @@ export function IconButton({
   );
 }
 
-export function Field({ label, children }: { label: string; children: ReactNode }) {
+export function Field({ label, children }: { label?: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium text-ink-faint uppercase tracking-wide">{label}</span>
+      {label && (
+        <span className="text-xs font-medium text-ink-faint uppercase tracking-wide">{label}</span>
+      )}
       {children}
     </label>
   );
 }
 
 export const inputClass =
-  "w-full rounded-md border border-border bg-surface-0 px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent placeholder:text-ink-faint";
+  "w-full rounded-md border border-border bg-surface-0 px-[4px] py-[2px] text-xs text-ink outline-none focus:border-accent placeholder:text-ink-faint disabled:cursor-not-allowed disabled:opacity-40";
 
 export const selectClass =
-  "w-full rounded-md border border-border bg-surface-0 px-2 py-1.5 text-sm text-ink outline-none focus:border-accent";
+  "w-full rounded-md border border-border bg-surface-0 px-[4px] py-[2px] text-xs text-ink outline-none focus:border-accent";

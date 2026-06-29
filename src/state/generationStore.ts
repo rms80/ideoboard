@@ -8,11 +8,12 @@
 // ───────────────────────────────────────────────────────────────────────────
 import { create } from "zustand";
 import type { ID, GenerationResult } from "../types";
-import { useSceneStore, isDraftDirty, currentNode } from "./sceneStore";
+import { useSceneStore, currentNode } from "./sceneStore";
 import { clonePrompt } from "./factory";
 import { useSettingsStore } from "./settingsStore";
 import { generateImage } from "../services/ideogram";
-import { downloadAndStore } from "../services/images";
+import { downloadAndStore, storeImageBlob } from "../services/images";
+import { renderMockImage } from "../services/mockImage";
 import { newId } from "../util/id";
 
 export type GenStatus = "idle" | "generating" | "error";
@@ -47,12 +48,12 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
     const node = currentNode(scene);
 
     if (node.results.length === 0) {
+      // First image for this (editable) node: commit the prompt, then generate.
       sceneState.commitDraftToCurrentNode();
       enqueue(node.id, set, get);
-    } else if (isDraftDirty()) {
-      const childId = sceneState.createChildFromDraft();
-      if (childId) enqueue(childId, set, get);
     } else {
+      // Node already has an image (prompt locked) → append another result. There's
+      // no implicit branch-on-edit anymore; branching is explicit (Edit/Branch).
       enqueue(node.id, set, get);
     }
   },
@@ -117,7 +118,22 @@ async function runTask(task: Task): Promise<void> {
 
   const settings = useSettingsStore.getState();
   if (!settings.apiKey) {
-    throw new Error("No API key set — open Settings and paste your Ideogram key.");
+    // Testing mode: no API key → synthesize a placeholder image locally so the
+    // full Generate / Regenerate / branch flow can be exercised offline.
+    const { blob } = await renderMockImage(node.prompt);
+    const stored = await storeImageBlob(blob);
+    const result: GenerationResult = {
+      id: newId(),
+      imageId: stored.imageId,
+      thumbnailId: stored.thumbnailId,
+      seed: Math.floor(Math.random() * 1_000_000),
+      resolution: node.prompt.resolution,
+      isImageSafe: true,
+      promptSnapshot: clonePrompt(node.prompt),
+      createdAt: Date.now(),
+    };
+    useSceneStore.getState().appendResult(task.nodeId, result);
+    return;
   }
 
   const resp = await generateImage(

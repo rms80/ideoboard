@@ -52,12 +52,12 @@ src/
   types/index.ts        data model + Ideogram wire types + RESOLUTIONS/SPEEDS enums
   util/                 id.ts (newId), misc.ts (clamp, debounce)
   state/                Zustand stores (see "State" below) + factory.ts
-  services/             db, images, ideogram, tags, layout, persistence, exchange
+  services/             db, images, ideogram, mockImage, tags, layout, persistence, exchange
   hooks/                useObjectUrl, useUndo, useKeyboardShortcuts
   components/
     AppShell, TopBar, SettingsModal
     common/             ui.tsx (primitives), TagField.tsx, ContextMenu.tsx
-    focus/              FocusView, ImageStage, BoxLayer, BoxItem, BoxInspector,
+    focus/              FocusView, ImageStage, BoxLayer, BoxItem, BoxPanel,
                         PromptPanel, TagsPanel, ResultCycler, Breadcrumb
     graph/              GraphView, GraphNode
 ```
@@ -80,6 +80,8 @@ Compares `draft` ↔ committed (`isDraftDirty()`):
 
 `Regenerate` always appends to the current node using its committed prompt. A concurrency-limited queue (**≤10 in-flight**, matches Ideogram's default rate limit) runs tasks; each returned image → `downloadAndStore()` → `GenerationResult`.
 
+**Testing mode:** when no `apiKey` is set, `runTask` does **not** error — it synthesizes a placeholder image locally via `services/mockImage.ts` (`renderMockImage`): random background, each obj box filled (its color or random) with its label drawn on top, each text box's literal text drawn centered, at the prompt's resolution. Lets the whole Generate/Regenerate/branch flow be exercised offline.
+
 ### 4. Undo/redo (zundo) — what is and isn't tracked
 History tracks **content edits**: `draft` text/box/tag edits and **branch creation**. It does **not** track navigation, result appends, result-index, layout positions, or viewport — those go through the `withoutHistory()` helper (pauses the zundo temporal store). Rapid edits are grouped into one undo entry via a leading-throttle on `handleSet` (~350ms). When adding new mutations, decide deliberately: undoable → plain action; transient → wrap in `withoutHistory`.
 
@@ -101,13 +103,13 @@ Secret-key image APIs omit CORS and serve images from hosts we don't control. `P
 
 **`settingsStore`** (localStorage) — `apiKey`, `defaultResolution`, `defaultRenderingSpeed`, `enableCopyrightDetection`.
 
-**`uiStore`** (transient) — `viewMode`, `settingsOpen`, `boxTool`, box/tag selection, `inspectorBoxId`, typed `clipboard` (`{kind:"boxes"|"tags", items}`), `viewport`.
+**`uiStore`** (transient) — `viewMode`, `settingsOpen`, box/tag selection, `inspectorBoxId`, `focusBoxNonce`, `pendingBoxId` (just-drawn blank box → backspace/undo in its empty Description cancels it), typed `clipboard` (`{kind:"boxes"|"tags", items}`), `viewport`. Box interaction is modeless (no tool palette) — see `BoxLayer`. Its pointer surface spans the **whole middle viewport** (the letterbox around the image is canvas too); coordinates map to the image rect (passed in as `imageBox`) and are *not* clamped (letterbox → values <0 / >1000). Hover a border (or a selected box's interior) → grab cursor; drag **from a border, or inside a selected box,** moves; drag a handle resizes; drag inside the image (incl. an *unselected* box) draws (obj by default, press `t` mid-draw to toggle text/obj); **drag in the letterbox, or shift+drag, marquees** (may start/end outside the image); click selects (border→containment), click in empty/letterbox clears.
 
 **Services** — `tags.ts`: `resolveText/extractTagRefs/parseTagLine/formatTagLine/isValidTagName/findUndefinedRefs` (all pure). `layout.ts`: `computeLayout(nodes, rootId)` (pure). `ideogram.ts`: `promptToV4Json/buildFormData/generateImage`. `images.ts`: `downloadAndStore/storeImageBlob/get*ObjectURL/revoke*`. `db.ts`: scene + blob CRUD. `exchange.ts`: `exportSceneZip/downloadSceneZip/importSceneZip`.
 
 **`TagField`** (frozen prop contract — used by all free-text prompt fields and box fields):
 ```ts
-{ value, onChange, tags, multiline?, placeholder?, className?, ariaLabel?, onDropTag? }
+{ value, onChange, tags, multiline?, placeholder?, className?, ariaLabel?, disabled?, onDropTag? }
 ```
 Stores **plain text** with `#name` tokens; chips/preview are render-only. Tag drag mime: `application/x-ideoboard-tag` (payload = bare name).
 

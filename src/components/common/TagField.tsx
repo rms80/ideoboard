@@ -15,10 +15,11 @@
 //
 // The prop contract is FROZEN — do not change it.
 // ───────────────────────────────────────────────────────────────────────────
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   ChangeEvent,
   DragEvent as ReactDragEvent,
+  FormEvent as ReactFormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   RefObject,
@@ -26,11 +27,11 @@ import type {
 } from "react";
 import { createPortal } from "react-dom";
 import type { PromptTag } from "../../types";
-import { extractTagRefs, findUndefinedRefs, resolveText } from "../../services/tags";
+import { extractTagRefs, findUndefinedRefs, isValidTagName, resolveText } from "../../services/tags";
 import { newId } from "../../util/id";
 import { useSceneStore } from "../../state/sceneStore";
 import { useUiStore } from "../../state/uiStore";
-import { inputClass } from "./ui";
+import { Button, inputClass } from "./ui";
 import { useContextMenu } from "./ContextMenu";
 
 const TAG_MIME = "application/x-ideoboard-tag";
@@ -45,6 +46,7 @@ export interface TagFieldProps {
   placeholder?: string;
   className?: string;
   ariaLabel?: string;
+  disabled?: boolean;
   onDropTag?: (tagName: string) => void; // optional override; default appends "#name"
 }
 
@@ -76,7 +78,8 @@ function getActiveTagQuery(value: string, caret: number): { start: number; query
 }
 
 export function TagField(props: TagFieldProps): JSX.Element {
-  const { value, onChange, tags, multiline = false, placeholder, className, ariaLabel } = props;
+  const { value, onChange, tags, multiline = false, placeholder, className, ariaLabel, disabled } =
+    props;
 
   const fieldRef = useRef<FieldEl | null>(null);
   const pendingCaretRef = useRef<number | null>(null);
@@ -85,10 +88,40 @@ export function TagField(props: TagFieldProps): JSX.Element {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  // "Convert to tag" modal: captures the selection range + text to replace, then
+  // prompts for a name. Null when closed.
+  const [convert, setConvert] = useState<{ start: number; end: number; selected: string } | null>(
+    null,
+  );
+  const [convertName, setConvertName] = useState("");
 
   const addTag = useSceneStore((s) => s.addTag);
   const setSelectedTags = useUiStore((s) => s.setSelectedTags);
+  const requestTagEdit = useUiStore((s) => s.requestTagEdit);
   const { menu: ctxMenu, open: openCtx } = useContextMenu();
+
+  // Close the Convert modal on Escape (only while it's open).
+  useEffect(() => {
+    if (!convert) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConvert(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [convert]);
+
+  const submitConvert = (e: ReactFormEvent) => {
+    e.preventDefault();
+    if (!convert) return;
+    const name = convertName.trim();
+    if (!isValidTagName(name)) return;
+    const id = newId();
+    addTag({ id, name, body: convert.selected });
+    setSelectedTags([id]);
+    // Replace the selected text in the source field with the new "#name" reference.
+    onChange(value.slice(0, convert.start) + "#" + name + value.slice(convert.end));
+    setConvert(null);
+  };
 
   // Re-apply caret after a controlled value swap (autocomplete completion).
   useLayoutEffect(() => {
@@ -168,6 +201,15 @@ export function TagField(props: TagFieldProps): JSX.Element {
   };
 
   const handleKeyDown = (e: ReactKeyboardEvent<FieldEl>) => {
+    // Escape with no autocomplete open "commits" the field: edits are already live
+    // in the draft (onChange writes through), so this just ends the editing session
+    // by blurring. Stop propagation so it isn't also read as e.g. clear-selection.
+    if (e.key === "Escape" && !menu) {
+      e.preventDefault();
+      e.stopPropagation();
+      fieldRef.current?.blur();
+      return;
+    }
     if (!menu) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -217,12 +259,28 @@ export function TagField(props: TagFieldProps): JSX.Element {
     const selected = el.value.slice(start, end).trim();
     openCtx(e, [
       {
-        label: "Create tag from selection",
+        // Copy the selected text into a brand-new (unnamed) tag's body and drop
+        // into its editor; the source field is left unchanged.
+        label: "Copy to new tag",
         disabled: !selected,
         onSelect: () => {
           const id = newId();
-          addTag({ id, name: "", body: selected });
+          // Set the edit request BEFORE adding the tag so it's already in place on
+          // the render where the new row first mounts (cross-store updates may not
+          // batch). Seeds the row "# <selection>", caret just after the '#'.
+          requestTagEdit(id, true);
           setSelectedTags([id]);
+          addTag({ id, name: "", body: selected });
+        },
+      },
+      {
+        // Prompt for a name, create the tag, and replace the selection in the
+        // source field with the "#name" reference.
+        label: "Convert to tag…",
+        disabled: !selected,
+        onSelect: () => {
+          setConvertName("");
+          setConvert({ start, end, selected });
         },
       },
     ]);
@@ -244,6 +302,7 @@ export function TagField(props: TagFieldProps): JSX.Element {
   const shared = {
     value,
     placeholder,
+    disabled,
     "aria-label": ariaLabel,
     title: refs.length ? resolved : undefined,
     className: fieldClass,
@@ -273,14 +332,6 @@ export function TagField(props: TagFieldProps): JSX.Element {
           undefined: {undefinedRefs.map((n) => "#" + n).join(", ")}
         </div>
       )}
-      {refs.length > 0 && resolved && resolved !== value && (
-        <div
-          className="truncate text-[11px] leading-tight text-ink-faint"
-          title={resolved}
-        >
-          → {resolved}
-        </div>
-      )}
 
       {menu &&
         rect &&
@@ -307,6 +358,57 @@ export function TagField(props: TagFieldProps): JSX.Element {
               </li>
             ))}
           </ul>,
+          document.body,
+        )}
+
+      {convert &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setConvert(null);
+            }}
+          >
+            <form
+              onSubmit={submitConvert}
+              className="w-full max-w-sm rounded-xl border border-border bg-surface-1 p-5 shadow-2xl"
+            >
+              <h2 className="mb-3 text-lg font-semibold text-ink">Convert to tag</h2>
+              {/* Live preview of the resulting tag line; updates as you type. */}
+              <p className="mb-3 truncate text-sm" title={convert.selected}>
+                <span className="font-medium text-accent">#{convertName.trim() || "tagname"}</span>{" "}
+                <span className="text-ink-faint">{convert.selected}</span>
+              </p>
+              <input
+                type="text"
+                className={inputClass}
+                autoFocus
+                spellCheck={false}
+                // Stop browsers / password managers from treating this lone field
+                // as a credential input.
+                autoComplete="off"
+                name="tag-name"
+                data-1p-ignore="true"
+                data-lpignore="true"
+                placeholder="name"
+                value={convertName}
+                onChange={(e) => setConvertName(e.target.value)}
+              />
+              {convertName.trim() !== "" && !isValidTagName(convertName.trim()) && (
+                <p className="mt-1 text-xs text-danger">
+                  Use only letters, numbers, “_” or “-”.
+                </p>
+              )}
+              <div className="mt-5 flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={() => setConvert(null)}>
+                  Cancel
+                </Button>
+                <Button type="submit" variant="accent" disabled={!isValidTagName(convertName.trim())}>
+                  Create
+                </Button>
+              </div>
+            </form>
+          </div>,
           document.body,
         )}
 

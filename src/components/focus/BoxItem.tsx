@@ -1,36 +1,29 @@
 // ───────────────────────────────────────────────────────────────────────────
-// BoxItem — a single draggable / resizable bounding box rendered over the image.
+// BoxItem — presentational render of a single bounding box over the image.
 //
 // Coordinates are stored NORMALIZED 0–1000 per axis (origin top-left, matching
 // Ideogram). The box maps to CSS percentages of the overlay (which exactly
 // covers the rendered image rect): left = xMin/10%, width = (xMax-xMin)/10%, …
-// Pointer math converts px → normalized via the overlay's bounding rect, captured
-// once at gesture start (so a stale layout mid-drag can't skew the math).
+//
+// This component is intentionally NON-interactive (`pointer-events-none`): ALL
+// gestures (select / move / draw / resize / marquee / tag-drop) are hit-tested
+// and handled centrally by BoxLayer, which needs HANDLE geometry — exported here
+// so rendering and hit-testing share one source of truth.
+//
+// Selection recolors the box's own border orange (no extra ring) and does NOT
+// change its z-order. The resize grips are rendered separately (BoxHandles) on a
+// top layer by BoxLayer, so they stay visible/grabbable even when the selected
+// box sits beneath an overlapping one.
 // ───────────────────────────────────────────────────────────────────────────
-import { useRef, useState } from "react";
-import type { CSSProperties, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties } from "react";
 import type { PromptBox } from "../../types";
-import { useSceneStore } from "../../state/sceneStore";
-import { useUiStore } from "../../state/uiStore";
-import { clamp } from "../../util/misc";
+import { effectiveBoxColor } from "./swatches";
 
-const TAG_MIME = "application/x-ideoboard-tag";
-/** Minimum box extent (normalized) preserved while resizing. */
-const MIN_SIZE = 10;
+export type Edges = { left?: boolean; right?: boolean; top?: boolean; bottom?: boolean };
 
-type Edges = { left?: boolean; right?: boolean; top?: boolean; bottom?: boolean };
-
-interface Gesture {
-  mode: "move" | "resize";
-  edges?: Edges;
-  rect: DOMRect;
-  startNx: number;
-  startNy: number;
-  orig: { xMin: number; yMin: number; xMax: number; yMax: number };
-}
-
-// 8 resize handles: center position (% of box) + the edges each one drives.
-const HANDLES: { id: string; x: number; y: number; cursor: string; edges: Edges }[] = [
+// 8 resize handles: center position (% of box) + the edges each one drives. Used
+// for hit-testing in BoxLayer; visual rendering lives in BoxHandles below.
+export const HANDLES: { id: string; x: number; y: number; cursor: string; edges: Edges }[] = [
   { id: "nw", x: 0, y: 0, cursor: "nwse-resize", edges: { left: true, top: true } },
   { id: "n", x: 50, y: 0, cursor: "ns-resize", edges: { top: true } },
   { id: "ne", x: 100, y: 0, cursor: "nesw-resize", edges: { right: true, top: true } },
@@ -41,176 +34,159 @@ const HANDLES: { id: string; x: number; y: number; cursor: string; edges: Edges 
   { id: "w", x: 0, y: 50, cursor: "ew-resize", edges: { left: true } },
 ];
 
+/** Orange selection / active-edit color (matches the new-box draw preview). */
+const SELECT_COLOR = "#f97316";
+
 export interface BoxItemProps {
   box: PromptBox;
   selected: boolean;
-  /** Returns the overlay's current bounding rect (the 0–1000 canvas in px). */
-  getRect: () => DOMRect | null;
+  dropHover: boolean;
 }
 
-export function BoxItem({ box, selected, getRect }: BoxItemProps) {
-  const updateBox = useSceneStore((s) => s.updateBox);
-  const setSelectedBoxes = useUiStore((s) => s.setSelectedBoxes);
-  const toggleBoxSelection = useUiStore((s) => s.toggleBoxSelection);
-  const setInspectorBox = useUiStore((s) => s.setInspectorBox);
-
-  const bodyRef = useRef<HTMLDivElement | null>(null);
-  const gesture = useRef<Gesture | null>(null);
-  const [dropHover, setDropHover] = useState(false);
-
-  const id = box.id;
+export function BoxItem({ box, selected, dropHover }: BoxItemProps) {
   const { xMin, yMin, xMax, yMax } = box.bbox;
-
-  const pointToNorm = (clientX: number, clientY: number, rect: DOMRect) => ({
-    nx: ((clientX - rect.left) / rect.width) * 1000,
-    ny: ((clientY - rect.top) / rect.height) * 1000,
-  });
-
-  const beginGesture = (e: ReactPointerEvent, mode: "move" | "resize", edges?: Edges) => {
-    const rect = getRect();
-    if (!rect) return;
-    const { nx, ny } = pointToNorm(e.clientX, e.clientY, rect);
-    gesture.current = { mode, edges, rect, startNx: nx, startNy: ny, orig: { ...box.bbox } };
-    bodyRef.current?.setPointerCapture(e.pointerId);
-  };
-
-  const onBodyPointerDown = (e: ReactPointerEvent) => {
-    if (e.button !== 0) return;
-    // Stop the overlay from treating this as an empty-area draw/clear.
-    e.stopPropagation();
-    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
-    if (additive) {
-      toggleBoxSelection(id, true);
-    } else {
-      setSelectedBoxes([id]);
-      setInspectorBox(id);
-    }
-    beginGesture(e, "move");
-  };
-
-  const onHandlePointerDown = (e: ReactPointerEvent, edges: Edges) => {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    setSelectedBoxes([id]);
-    setInspectorBox(id);
-    beginGesture(e, "resize", edges);
-  };
-
-  const onPointerMove = (e: ReactPointerEvent) => {
-    const g = gesture.current;
-    if (!g) return;
-    const { nx, ny } = pointToNorm(e.clientX, e.clientY, g.rect);
-    const dx = nx - g.startNx;
-    const dy = ny - g.startNy;
-    if (g.mode === "move") {
-      const w = g.orig.xMax - g.orig.xMin;
-      const h = g.orig.yMax - g.orig.yMin;
-      const nxMin = clamp(g.orig.xMin + dx, 0, 1000 - w);
-      const nyMin = clamp(g.orig.yMin + dy, 0, 1000 - h);
-      updateBox(id, (b) => {
-        b.bbox = { xMin: nxMin, yMin: nyMin, xMax: nxMin + w, yMax: nyMin + h };
-      });
-    } else {
-      const E = g.edges ?? {};
-      let nXMin = g.orig.xMin;
-      let nYMin = g.orig.yMin;
-      let nXMax = g.orig.xMax;
-      let nYMax = g.orig.yMax;
-      // Each axis moves at most one edge → ordering stays valid (xMin<xMax).
-      if (E.left) nXMin = clamp(g.orig.xMin + dx, 0, g.orig.xMax - MIN_SIZE);
-      if (E.right) nXMax = clamp(g.orig.xMax + dx, g.orig.xMin + MIN_SIZE, 1000);
-      if (E.top) nYMin = clamp(g.orig.yMin + dy, 0, g.orig.yMax - MIN_SIZE);
-      if (E.bottom) nYMax = clamp(g.orig.yMax + dy, g.orig.yMin + MIN_SIZE, 1000);
-      updateBox(id, (b) => {
-        b.bbox = { xMin: nXMin, yMin: nYMin, xMax: nXMax, yMax: nYMax };
-      });
-    }
-  };
-
-  const onPointerUp = (e: ReactPointerEvent) => {
-    if (!gesture.current) return;
-    try {
-      bodyRef.current?.releasePointerCapture(e.pointerId);
-    } catch {
-      /* capture may already be gone */
-    }
-    gesture.current = null;
-  };
-
-  // ── Drag a tag onto the box → append "#name" to the box's desc ──────────────
-  const onDragOver = (e: ReactDragEvent) => {
-    if (Array.from(e.dataTransfer.types).includes(TAG_MIME)) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "copy";
-      setDropHover(true);
-    }
-  };
-  const onDragLeave = () => setDropHover(false);
-  const onDrop = (e: ReactDragEvent) => {
-    const name = e.dataTransfer.getData(TAG_MIME);
-    if (!name) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setDropHover(false);
-    updateBox(id, (b) => {
-      b.desc = (b.desc ? b.desc + " " : "") + "#" + name;
-    });
-  };
-
   const isText = box.kind === "text";
+  // Text boxes show their literal text; object boxes show their (optional) label.
+  const display = isText ? box.text : box.label;
+
+  // A black halo flanking the colored outline (2px outside + 2px inside) keeps the
+  // stacking order of overlapping boxes legible; a tag-drop target adds a transient
+  // accent ring on top of it.
+  const boxShadow =
+    "0 0 0 2px rgba(0,0,0,0.85), inset 0 0 0 2px rgba(0,0,0,0.85)" +
+    (dropHover ? ", 0 0 0 4px var(--color-accent)" : "");
+
+  // Selected → orange border; else the box's effective color (explicit, or the
+  // kind default which is itself a palette swatch).
+  const borderColor = selected ? SELECT_COLOR : effectiveBoxColor(box);
+
   const style: CSSProperties = {
     left: `${xMin / 10}%`,
     top: `${yMin / 10}%`,
     width: `${(xMax - xMin) / 10}%`,
     height: `${(yMax - yMin) / 10}%`,
-    borderColor: box.color || undefined,
-    touchAction: "none",
+    borderColor,
+    boxShadow,
   };
 
-  const baseBorder = box.color ? "" : isText ? "border-accent/80" : "border-ink/70";
-  const stateRing = dropHover
-    ? "ring-2 ring-accent bg-accent-soft/40"
-    : selected
-      ? "ring-2 ring-accent z-10 bg-accent/5"
-      : "bg-accent/5";
+  const stateBg = dropHover ? "bg-accent-soft/40" : "bg-accent/5";
 
   return (
     <div
-      ref={bodyRef}
-      data-boxitem={id}
       style={style}
-      className={`absolute box-border cursor-move select-none border-2 ${
-        isText ? "border-dashed" : "border-solid"
-      } ${baseBorder} ${stateRing}`}
-      onPointerDown={onBodyPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      className={`pointer-events-none absolute box-border select-none ${
+        // Selected boxes keep a 2px outline; unselected ones are 1px thinner.
+        selected ? "border-2" : "border"
+      } ${isText ? "border-dashed" : "border-solid"} ${stateBg}`}
     >
-      {/* Kind badge */}
-      <span className="pointer-events-none absolute left-0 top-0 m-0.5 rounded bg-surface-2/90 px-1 text-[10px] font-semibold leading-tight text-ink">
-        {isText ? "T" : "▦"}
-      </span>
+      {/* Centered text/label. For the SELECTED box this is rendered separately on a
+          top layer (BoxLabel) so it can't be hidden behind an overlapping box. */}
+      {!selected && <LabelContent display={display} />}
+    </div>
+  );
+}
 
-      {/* Resize handles (selected only) */}
-      {selected &&
-        HANDLES.map((h) => (
-          <span
-            key={h.id}
-            onPointerDown={(e) => onHandlePointerDown(e, h.edges)}
-            style={{
-              left: `${h.x}%`,
-              top: `${h.y}%`,
-              transform: "translate(-50%, -50%)",
-              cursor: h.cursor,
-              touchAction: "none",
-            }}
-            className="absolute h-2.5 w-2.5 rounded-sm border border-surface-0 bg-accent"
-          />
-        ))}
+/** Centered literal text (text box) / label (object box), clipped on overflow. */
+function LabelContent({ display }: { display?: string }) {
+  if (!display) return null;
+  return (
+    <div className="absolute inset-0 flex items-center justify-center overflow-hidden p-1">
+      <span className="text-center text-[11px] font-medium leading-tight text-ink [overflow-wrap:anywhere] [text-shadow:0_1px_3px_rgba(0,0,0,0.9)]">
+        {display}
+      </span>
+    </div>
+  );
+}
+
+// The selected box's label, drawn on the top layer (above all boxes) so an
+// overlapping box can't clip it. Positioned at the box rect like BoxHandles.
+export function BoxLabel({ box }: { box: PromptBox }) {
+  const { xMin, yMin, xMax, yMax } = box.bbox;
+  const display = box.kind === "text" ? box.text : box.label;
+  if (!display) return null;
+  return (
+    <div
+      className="pointer-events-none absolute"
+      style={{
+        left: `${xMin / 10}%`,
+        top: `${yMin / 10}%`,
+        width: `${(xMax - xMin) / 10}%`,
+        height: `${(yMax - yMin) / 10}%`,
+      }}
+    >
+      <LabelContent display={display} />
+    </div>
+  );
+}
+
+// ── Resize grips ─────────────────────────────────────────────────────────────
+// Rendered as thick orange line segments rather than dots: corners are L-brackets
+// (two perpendicular arms), edge mid-points are a single straddling segment. Drawn
+// on a top layer (see BoxLayer) so they sit above every box.
+//
+// Each L-bracket is necessarily two rectangles, so a per-rectangle outline would
+// leave a seam where they meet. Instead we paint ALL the arms once in black,
+// slightly grown on every side, then ALL of them again in orange at true size on
+// top — the overlapping black rects merge into one outline and the overlapping
+// orange rects merge into one fill, with no internal seams.
+const HANDLE_COLOR = "#ffffff"; // grips are always white, independent of box color
+const HANDLE_OUTLINE = "rgba(0,0,0,0.7)"; // dark border → legible on any image
+const ARM = 12; // corner-bracket arm length (px)
+const SEG = 16; // edge-segment length (px)
+const THICK = 3; // line thickness (px)
+const OFF = THICK / 2; // straddle the box outline so the grip is centered on it
+const OUTLINE = 1; // border thickness (px) the black layer extends past the orange
+
+// Base geometry of every arm/segment (the orange fill); the black border layer is
+// this grown by OUTLINE on each side (see `grow`).
+const HANDLE_BARS: CSSProperties[] = [
+  // corner L-brackets (each corner = a horizontal arm + a vertical arm)
+  { top: -OFF, left: -OFF, width: ARM, height: THICK },
+  { top: -OFF, left: -OFF, width: THICK, height: ARM },
+  { top: -OFF, right: -OFF, width: ARM, height: THICK },
+  { top: -OFF, right: -OFF, width: THICK, height: ARM },
+  { bottom: -OFF, right: -OFF, width: ARM, height: THICK },
+  { bottom: -OFF, right: -OFF, width: THICK, height: ARM },
+  { bottom: -OFF, left: -OFF, width: ARM, height: THICK },
+  { bottom: -OFF, left: -OFF, width: THICK, height: ARM },
+  // edge mid-point segments
+  { top: -OFF, left: "50%", width: SEG, height: THICK, transform: "translateX(-50%)" },
+  { bottom: -OFF, left: "50%", width: SEG, height: THICK, transform: "translateX(-50%)" },
+  { left: -OFF, top: "50%", width: THICK, height: SEG, transform: "translateY(-50%)" },
+  { right: -OFF, top: "50%", width: THICK, height: SEG, transform: "translateY(-50%)" },
+];
+
+/** Grow a bar by OUTLINE on every side (numeric offsets shift out; "50%" stays centered). */
+function grow(s: CSSProperties): CSSProperties {
+  const out: CSSProperties = { ...s };
+  if (typeof s.top === "number") out.top = s.top - OUTLINE;
+  if (typeof s.bottom === "number") out.bottom = s.bottom - OUTLINE;
+  if (typeof s.left === "number") out.left = s.left - OUTLINE;
+  if (typeof s.right === "number") out.right = s.right - OUTLINE;
+  if (typeof s.width === "number") out.width = s.width + 2 * OUTLINE;
+  if (typeof s.height === "number") out.height = s.height + 2 * OUTLINE;
+  return out;
+}
+
+export function BoxHandles({ box }: { box: PromptBox }) {
+  const { xMin, yMin, xMax, yMax } = box.bbox;
+  return (
+    <div
+      className="pointer-events-none absolute"
+      style={{
+        left: `${xMin / 10}%`,
+        top: `${yMin / 10}%`,
+        width: `${(xMax - xMin) / 10}%`,
+        height: `${(yMax - yMin) / 10}%`,
+      }}
+    >
+      {/* black outline layer (grown), then orange fill layer on top (true size) */}
+      {HANDLE_BARS.map((b, i) => (
+        <span key={`o${i}`} style={{ position: "absolute", background: HANDLE_OUTLINE, ...grow(b) }} />
+      ))}
+      {HANDLE_BARS.map((b, i) => (
+        <span key={`f${i}`} style={{ position: "absolute", background: HANDLE_COLOR, ...b }} />
+      ))}
     </div>
   );
 }
