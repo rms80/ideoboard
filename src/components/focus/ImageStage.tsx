@@ -33,6 +33,7 @@ export function ImageStage() {
   const clearError = useGenerationStore((s) => s.clearError);
   const regenerate = useGenerationStore((s) => s.regenerate);
   const showImage = useUiStore((s) => s.showImage);
+  const openLightbox = useUiStore((s) => s.openLightbox);
 
   // Measure the viewport so the image (and the box overlay) can fill it edge-to-edge
   // at the right aspect ratio. The wrapper is sized to the displayed image rect so
@@ -61,6 +62,11 @@ export function ImageStage() {
       }
     : null;
 
+  // Magnify button flush against the image's top-right corner: top-aligned with
+  // the image top, left edge touching the image's right edge (zero gap).
+  const MAG = 20;
+  const magnifyPos = imageBox ? { top: imageBox.y, left: imageBox.x + imageBox.w } : null;
+
   return (
     <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden bg-surface-0">
       {imageBox && (
@@ -80,6 +86,31 @@ export function ImageStage() {
           )}
         </div>
       )}
+      {/* Magnify → open the fullscreen lightbox (only when a result image exists). */}
+      {url && magnifyPos && (
+        <button
+          type="button"
+          title="View fullscreen"
+          onClick={() => openLightbox()}
+          style={{ ...magnifyPos, height: MAG, width: MAG }}
+          className="absolute z-20 flex items-center justify-center border border-border bg-surface-1/90 text-ink-dim transition hover:bg-surface-2 hover:text-ink"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-3 w-3"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
+          </svg>
+        </button>
+      )}
+
       <BoxLayer imageBox={imageBox} />
 
       {status === "generating" && (

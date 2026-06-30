@@ -4,6 +4,7 @@ import { TopBar } from "./TopBar";
 import { FocusView } from "./focus/FocusView";
 import { GraphView } from "./graph/GraphView";
 import { SettingsModal } from "./SettingsModal";
+import { Lightbox } from "./focus/Lightbox";
 
 export function AppShell() {
   const viewMode = useUiStore((s) => s.viewMode);
@@ -16,6 +17,7 @@ export function AppShell() {
         {viewMode === "focus" ? <FocusView /> : <GraphView />}
       </main>
       <SettingsModal />
+      <Lightbox />
     </div>
   );
 }

@@ -18,6 +18,10 @@ function isEditable(el: EventTarget | null): boolean {
 export function useKeyboardShortcuts(): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The lightbox is modal and owns the keyboard while open (Esc + arrows,
+      // including Shift+arrows cycling results instead of navigating nodes).
+      if (useUiStore.getState().lightboxOpen) return;
+
       const mod = e.metaKey || e.ctrlKey;
       const editable = isEditable(e.target);
 
@@ -55,6 +59,19 @@ export function useKeyboardShortcuts(): void {
       if (mod && e.key.toLowerCase() === "g") {
         e.preventDefault();
         useUiStore.getState().setViewMode("graph");
+        return;
+      }
+
+      // Cmd/Ctrl+F opens the fullscreen lightbox — only in focus view and when the
+      // current node has an image; otherwise fall through to the browser's find.
+      if (mod && e.key.toLowerCase() === "f") {
+        const ui = useUiStore.getState();
+        if (ui.viewMode !== "focus") return;
+        const scene = useSceneStore.getState().scene;
+        const node = scene ? scene.nodes[scene.currentNodeId] : null;
+        if (!node || node.results.length === 0) return;
+        e.preventDefault();
+        ui.openLightbox();
         return;
       }
 

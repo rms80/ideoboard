@@ -43,6 +43,8 @@ interface UiState {
   // Focus-view overlay visibility toggles (the rendered image / the box overlays).
   showImage: boolean;
   showPrompts: boolean;
+  // Fullscreen image lightbox (modal pan/zoom of the current node's active result).
+  lightboxOpen: boolean;
 
   setViewMode: (m: ViewMode) => void;
   toggleViewMode: () => void;
@@ -52,6 +54,8 @@ interface UiState {
   setShowPrompts: (v: boolean) => void;
   openSettings: () => void;
   closeSettings: () => void;
+  openLightbox: () => void;
+  closeLightbox: () => void;
 
   setSelectedBoxes: (ids: ID[]) => void;
   toggleBoxSelection: (id: ID, additive: boolean) => void;
@@ -84,6 +88,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   viewport: { x: 0, y: 0, zoom: 1 },
   showImage: true,
   showPrompts: true,
+  lightboxOpen: false,
 
   setViewMode: (viewMode) => set({ viewMode }),
   toggleViewMode: () => set({ viewMode: get().viewMode === "graph" ? "focus" : "graph" }),
@@ -102,6 +107,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   setShowPrompts: (showPrompts) => set({ showPrompts }),
   openSettings: () => set({ settingsOpen: true }),
   closeSettings: () => set({ settingsOpen: false }),
+  openLightbox: () => set({ lightboxOpen: true }),
+  closeLightbox: () => set({ lightboxOpen: false }),
 
   setSelectedBoxes: (selectedBoxIds) =>
     set({ selectedBoxIds, inspectorBoxId: selectedBoxIds.length === 1 ? selectedBoxIds[0] : null }),
