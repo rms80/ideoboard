@@ -64,6 +64,91 @@ export async function storeImageBlob(blob: Blob): Promise<StoredImage> {
   return { imageId, thumbnailId, width, height };
 }
 
+/**
+ * Return a square version of the image. If it's already square (or undecodable),
+ * the original blob is returned untouched — no re-encode, no quality loss. A
+ * non-square image is centered on a black square canvas whose side equals the
+ * longest edge, giving letterbox/pillarbox black bars, and re-encoded as PNG.
+ */
+export async function padToSquare(blob: Blob): Promise<Blob> {
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(blob);
+  } catch {
+    return blob; // undecodable → store as-is
+  }
+  const { width, height } = bitmap;
+  if (width === 0 || height === 0 || width === height) {
+    bitmap.close();
+    return blob;
+  }
+  const side = Math.max(width, height);
+  const dx = Math.round((side - width) / 2);
+  const dy = Math.round((side - height) / 2);
+  try {
+    if (typeof OffscreenCanvas !== "undefined") {
+      const canvas = new OffscreenCanvas(side, side);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("no 2d context");
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, side, side);
+      ctx.drawImage(bitmap, dx, dy);
+      return await canvas.convertToBlob({ type: "image/png" });
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = side;
+    canvas.height = side;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no 2d context");
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, side, side);
+    ctx.drawImage(bitmap, dx, dy);
+    return await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob null"))), "image/png"),
+    );
+  } catch {
+    return blob;
+  } finally {
+    bitmap.close();
+  }
+}
+
+/**
+ * Re-encode an image blob as PNG. Used for clipboard writes, which across browsers
+ * only reliably accept `image/png`. Returns the original blob when it's already
+ * PNG, or null if it can't be decoded.
+ */
+export async function toPngBlob(blob: Blob): Promise<Blob | null> {
+  if (blob.type === "image/png") return blob;
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(blob);
+  } catch {
+    return null;
+  }
+  const { width, height } = bitmap;
+  try {
+    if (typeof OffscreenCanvas !== "undefined") {
+      const canvas = new OffscreenCanvas(width, height);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("no 2d context");
+      ctx.drawImage(bitmap, 0, 0);
+      return await canvas.convertToBlob({ type: "image/png" });
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no 2d context");
+    ctx.drawImage(bitmap, 0, 0);
+    return await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  } catch {
+    return null;
+  } finally {
+    bitmap.close();
+  }
+}
+
 // ─── Thumbnail generation ────────────────────────────────────────────────────
 
 interface Thumbnailed {

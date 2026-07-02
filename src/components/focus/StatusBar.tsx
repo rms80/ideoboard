@@ -80,7 +80,7 @@ export function StatusBar() {
           onChange={(e) => setNodeNote(node.id, e.target.value)}
           placeholder="Describe this result…"
           aria-label="Result description"
-          className="w-full rounded-md border border-border bg-surface-0 px-7 py-1 text-center text-xs text-ink outline-none focus:border-accent placeholder:text-ink-faint"
+          className="w-full rounded-md border border-border bg-surface-0 px-7 py-0.5 text-center text-xs text-ink outline-none focus:border-accent placeholder:text-ink-faint"
         />
         <button
           type="button"

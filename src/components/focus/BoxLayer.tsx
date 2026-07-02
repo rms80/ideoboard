@@ -47,6 +47,9 @@ const DRAW_BORDER = "rgba(249,115,22,0.95)";
 const DRAW_FILL = "rgba(249,115,22,0.18)";
 /** Black halo so the draw preview reads over busy images (matches BoxItem). */
 const DRAW_HALO = "0 0 0 2px rgba(0,0,0,0.85), inset 0 0 0 2px rgba(0,0,0,0.85)";
+/** Hover-highlight outline: a darker orange than the selection color, drawn on a
+ *  top layer over whichever box a click would select. */
+const HOVER_COLOR = "#c2410c";
 
 type BBox = { xMin: number; yMin: number; xMax: number; yMax: number };
 
@@ -109,15 +112,22 @@ export function BoxLayer({ imageBox }: BoxLayerProps) {
   const focusBoxField = useUiStore((s) => s.focusBoxField);
   const setPendingBox = useUiStore((s) => s.setPendingBox);
   const showPrompts = useUiStore((s) => s.showPrompts);
+  const showImage = useUiStore((s) => s.showImage);
   // Locked nodes (already have an image) are read-only: selection/marquee still
   // work for inspection, but drawing / moving / resizing boxes is disabled.
   const locked = useCurrentNodeLocked();
+  // A generated image is actually on screen beneath the boxes (locked ⇒ has a
+  // result) → BoxItem drops its black halo so only the colored lines draw.
+  const imageVisible = locked && showImage;
 
   const overlayRef = useRef<HTMLDivElement | null>(null); // container-filling pointer surface
   const imageRectRef = useRef<HTMLDivElement | null>(null); // sized to the image rect (coord space)
   const gesture = useRef<Gesture | null>(null);
   const [preview, setPreview] = useState<{ style: CSSProperties; kind: BoxKind | null } | null>(null);
   const [dropHoverId, setDropHoverId] = useState<ID | null>(null);
+  // The box a click would currently select (topmost under the cursor); highlighted
+  // on a top layer while hovering. Null during any active gesture / outside a box.
+  const [hoverBoxId, setHoverBoxId] = useState<ID | null>(null);
 
   // Coordinate conversions use the IMAGE rect (the inner element), so 0–1000 maps to
   // the image even though the pointer surface is the whole viewport.
@@ -393,31 +403,38 @@ export function BoxLayer({ imageBox }: BoxLayerProps) {
   const onPointerMove = (e: ReactPointerEvent) => {
     const g = gesture.current;
 
-    // No active gesture → hover affordance (grab on a border / selected interior).
+    // No active gesture → hover affordance (grab on a border / selected interior)
+    // plus the hover highlight over the box a click would select.
     if (!g) {
       const rect = getRect();
       if (!rect) return;
       const { nx, ny } = toNorm(e.clientX, e.clientY, rect);
       // Locked: no draw/move affordance — just show a selectable cursor over boxes.
       if (locked) {
-        setCursor(hitBox(nx, ny, rect) ? "pointer" : "default");
+        const id = hitBox(nx, ny, rect);
+        setHoverBoxId(id);
+        setCursor(id ? "pointer" : "default");
         return;
       }
       if (e.shiftKey || isOutside(nx, ny)) {
+        setHoverBoxId(null);
         setCursor("crosshair");
         return;
       }
       const handle = hitHandle(nx, ny, rect);
       if (handle) {
+        setHoverBoxId(null);
         setCursor(handle.cursor);
         return;
       }
       const boxId = hitBox(nx, ny, rect);
+      setHoverBoxId(boxId);
       const movable = !!boxId && (hitBorder(nx, ny, rect) === boxId || selectedBoxIds.includes(boxId));
       setCursor(movable ? "grab" : "crosshair");
       return;
     }
 
+    setHoverBoxId(null); // an active gesture (move/draw/resize/marquee) → no hover
     const { nx, ny } = toNorm(e.clientX, e.clientY, g.rect);
 
     if (!g.dragging) {
@@ -551,6 +568,8 @@ export function BoxLayer({ imageBox }: BoxLayerProps) {
     if (id) updateBox(id, (b) => void (b.desc = (b.desc ? b.desc + " " : "") + "#" + name));
   };
 
+  const hoverBox = hoverBoxId ? boxes.find((b) => b.id === hoverBoxId) : undefined;
+
   return (
     <div
       ref={overlayRef}
@@ -560,6 +579,7 @@ export function BoxLayer({ imageBox }: BoxLayerProps) {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onPointerLeave={() => setHoverBoxId(null)}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
@@ -576,22 +596,41 @@ export function BoxLayer({ imageBox }: BoxLayerProps) {
               box={b}
               selected={selectedBoxIds.includes(b.id)}
               dropHover={dropHoverId === b.id}
+              imageVisible={imageVisible}
             />
           ))}
 
           {/* Selected box's label on a top layer so an overlapping box can't clip
-              it (rendered regardless of lock — the label must always be visible). */}
-          {boxes
-            .filter((b) => selectedBoxIds.includes(b.id))
-            .map((b) => (
-              <BoxLabel key={`l-${b.id}`} box={b} />
-            ))}
+              it. Suppressed over a visible image (colored lines only). */}
+          {!imageVisible &&
+            boxes
+              .filter((b) => selectedBoxIds.includes(b.id))
+              .map((b) => (
+                <BoxLabel key={`l-${b.id}`} box={b} />
+              ))}
 
           {/* Resize grips on a top layer (above all boxes); not on locked nodes. */}
           {!locked &&
             boxes
               .filter((b) => selectedBoxIds.includes(b.id))
               .map((b) => <BoxHandles key={`h-${b.id}`} box={b} />)}
+
+          {/* Hover highlight: a darker-orange duplicate of the box a click would
+              select, drawn on top of every other box (matching its dash style). */}
+          {hoverBox && (
+            <div
+              className={`pointer-events-none absolute border-2 ${
+                hoverBox.kind === "text" ? "border-dashed" : "border-solid"
+              }`}
+              style={{
+                left: `${hoverBox.bbox.xMin / 10}%`,
+                top: `${hoverBox.bbox.yMin / 10}%`,
+                width: `${(hoverBox.bbox.xMax - hoverBox.bbox.xMin) / 10}%`,
+                height: `${(hoverBox.bbox.yMax - hoverBox.bbox.yMin) / 10}%`,
+                borderColor: HOVER_COLOR,
+              }}
+            />
+          )}
 
           {preview &&
             (preview.kind ? (

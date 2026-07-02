@@ -76,10 +76,10 @@ export function promptToV4Json(prompt: StructuredPrompt): V4JsonPrompt {
     v4.style_description = style;
   }
 
+  // `background` is always emitted (Ideogram expects the field present), falling
+  // back to an empty string when the prompt has no background text.
   const background = expand(prompt.background, tags);
-  if (background || elements.length) {
-    v4.compositional_deconstruction = dropUndefined({ background, elements });
-  }
+  v4.compositional_deconstruction = { background: background ?? "", elements };
 
   return v4;
 }

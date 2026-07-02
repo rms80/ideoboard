@@ -22,11 +22,18 @@ export function FocusView() {
         </div>
       </div>
 
-      {/* Center column */}
-      <div className="flex min-h-0 flex-col gap-3 p-3">
-        <StatusBar />
+      {/* Center column. Tight top/bottom padding (pt-[3px] above the StatusBar,
+          pb-[3px] below the ResultCycler). Both the StatusBar→ImageStage and
+          ImageStage→ResultCycler gaps are halved to 6px via -mb-1.5 / -mt-1.5
+          (gap-3 = 12px less 6px). */}
+      <div className="flex min-h-0 flex-col gap-3 px-3 pb-[3px] pt-[3px]">
+        <div className="-mb-1.5">
+          <StatusBar />
+        </div>
         <ImageStage />
-        <ResultCycler />
+        <div className="-mt-1.5">
+          <ResultCycler />
+        </div>
       </div>
 
       {/* Right column */}

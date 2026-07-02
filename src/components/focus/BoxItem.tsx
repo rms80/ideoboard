@@ -41,20 +41,28 @@ export interface BoxItemProps {
   box: PromptBox;
   selected: boolean;
   dropHover: boolean;
+  /** True when a generated image shows beneath the boxes → draw only the colored
+   *  z-order lines: drop the black halo and the inner text label. */
+  imageVisible?: boolean;
 }
 
-export function BoxItem({ box, selected, dropHover }: BoxItemProps) {
+export function BoxItem({ box, selected, dropHover, imageVisible }: BoxItemProps) {
   const { xMin, yMin, xMax, yMax } = box.bbox;
   const isText = box.kind === "text";
   // Text boxes show their literal text; object boxes show their (optional) label.
   const display = isText ? box.text : box.label;
 
   // A black halo flanking the colored outline (2px outside + 2px inside) keeps the
-  // stacking order of overlapping boxes legible; a tag-drop target adds a transient
-  // accent ring on top of it.
-  const boxShadow =
-    "0 0 0 2px rgba(0,0,0,0.85), inset 0 0 0 2px rgba(0,0,0,0.85)" +
-    (dropHover ? ", 0 0 0 4px var(--color-accent)" : "");
+  // stacking order of overlapping boxes legible over a plain canvas; a tag-drop
+  // target adds a transient accent ring on top of it. Over a visible image we drop
+  // the halo entirely and keep only the colored line (and any drop ring).
+  const dropRing = "0 0 0 4px var(--color-accent)";
+  const boxShadow = imageVisible
+    ? dropHover
+      ? dropRing
+      : undefined
+    : "0 0 0 2px rgba(0,0,0,0.85), inset 0 0 0 2px rgba(0,0,0,0.85)" +
+      (dropHover ? ", " + dropRing : "");
 
   // Selected → orange border; else the box's effective color (explicit, or the
   // kind default which is itself a palette swatch).
@@ -80,8 +88,9 @@ export function BoxItem({ box, selected, dropHover }: BoxItemProps) {
       } ${isText ? "border-dashed" : "border-solid"} ${stateBg}`}
     >
       {/* Centered text/label. For the SELECTED box this is rendered separately on a
-          top layer (BoxLabel) so it can't be hidden behind an overlapping box. */}
-      {!selected && <LabelContent display={display} />}
+          top layer (BoxLabel) so it can't be hidden behind an overlapping box.
+          Over a visible image we suppress labels entirely (colored lines only). */}
+      {!selected && !imageVisible && <LabelContent display={display} />}
     </div>
   );
 }
