@@ -45,6 +45,7 @@ async function gcOrphanBlobs(removed: import("../types").Scene): Promise<void> {
         if (r.imageId) referenced.add(r.imageId);
         if (r.thumbnailId) referenced.add(r.thumbnailId);
       }
+      if (node.guideImageId) referenced.add(node.guideImageId);
     }
   }
   for (const node of Object.values(removed.nodes)) {
@@ -53,6 +54,8 @@ async function gcOrphanBlobs(removed: import("../types").Scene): Promise<void> {
       if (r.thumbnailId && !referenced.has(r.thumbnailId))
         await deleteThumbnailBlob(r.thumbnailId);
     }
+    if (node.guideImageId && !referenced.has(node.guideImageId))
+      await deleteImageBlob(node.guideImageId);
   }
 }
 

@@ -67,6 +67,10 @@ export interface GraphNode {
   prompt: StructuredPrompt; // node's committed prompt (incl. its own tags)
   results: GenerationResult[];
   currentResultIndex: number; // which result is "current"
+  // Optional reference/guide image (-> images store) shown faintly behind the
+  // prompt boxes to help compose a not-yet-generated node. Hidden once the node
+  // has a generated result. Currently only settable by pasting from the clipboard.
+  guideImageId?: ID;
   pos?: { x: number; y: number }; // cached layout (recomputed on structural change)
   createdAt: number;
   // Free-text label the user types to describe this node's result (status bar).

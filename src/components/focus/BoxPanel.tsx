@@ -164,7 +164,7 @@ export function BoxPanel() {
   return (
     <div
       onKeyDown={onPanelKeyDown}
-      className="flex min-h-0 flex-col gap-2 overflow-y-auto border-l border-border bg-surface-1 p-3 text-sm"
+      className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto bg-surface-1 p-3 text-sm"
     >
       {box && locked && (
         <p className="text-xs text-ink-faint">This node has an image — its prompt is locked.</p>

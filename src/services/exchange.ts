@@ -28,6 +28,7 @@ function collectBlobIds(scene: Scene): { images: Set<string>; thumbs: Set<string
       if (r.imageId) images.add(r.imageId);
       if (r.thumbnailId) thumbs.add(r.thumbnailId);
     }
+    if (node.guideImageId) images.add(node.guideImageId);
   }
   return { images, thumbs };
 }

@@ -68,6 +68,8 @@ interface SceneActions {
   commitDraftToCurrentNode: () => void;
   createChildFromDraft: () => ID | null;
   appendResult: (nodeId: ID, result: GenerationResult) => void;
+  /** Set (or clear, with undefined) a node's guide image. Not undoable. */
+  setGuideImage: (nodeId: ID, imageId: ID | undefined) => void;
   setCurrentResultIndex: (nodeId: ID, index: number) => void;
   /** Set a node's free-text status-bar note (personal label; not undoable). */
   setNodeNote: (nodeId: ID, note: string) => void;
@@ -274,6 +276,14 @@ export const useSceneStore = create<SceneStore>()(
         // A generation just landed → make sure the image is visible.
         useUiStore.getState().setShowImage(true);
       },
+
+      setGuideImage: (nodeId, imageId) =>
+        withoutHistory(() =>
+          set((s) => {
+            const n = s.scene?.nodes[nodeId];
+            if (n) n.guideImageId = imageId;
+          })
+        ),
 
       setCurrentResultIndex: (nodeId, index) =>
         withoutHistory(() =>
