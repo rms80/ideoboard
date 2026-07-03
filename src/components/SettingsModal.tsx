@@ -1,18 +1,32 @@
 import { useEffect, useState } from "react";
 import { useSettingsStore } from "../state/settingsStore";
+import type { Provider } from "../state/settingsStore";
 import { RESOLUTIONS, RENDERING_SPEEDS } from "../types";
 import { useUiStore } from "../state/uiStore";
 import { Button, Field, inputClass, selectClass } from "./common/ui";
+
+// Provider tabs — the selected tab is the backend used for generation.
+const PROVIDER_TABS: { id: Provider; label: string }[] = [
+  { id: "fal", label: "Fal.ai" },
+  { id: "ideogram", label: "Ideogram" },
+];
 
 export function SettingsModal() {
   const open = useUiStore((s) => s.settingsOpen);
   const close = useUiStore((s) => s.closeSettings);
 
   const settings = useSettingsStore();
+  const [provider, setProvider] = useState<Provider>(settings.provider);
   const [apiKey, setApiKey] = useState(settings.apiKey);
+  const [falApiKey, setFalApiKey] = useState(settings.falApiKey);
 
   useEffect(() => {
-    if (open) setApiKey(useSettingsStore.getState().apiKey);
+    if (open) {
+      const s = useSettingsStore.getState();
+      setProvider(s.provider);
+      setApiKey(s.apiKey);
+      setFalApiKey(s.falApiKey);
+    }
   }, [open]);
 
   useEffect(() => {
@@ -28,7 +42,9 @@ export function SettingsModal() {
 
   const save = (e: React.FormEvent) => {
     e.preventDefault();
+    settings.setProvider(provider);
     settings.setApiKey(apiKey.trim());
+    settings.setFalApiKey(falApiKey.trim());
     close();
   };
 
@@ -46,32 +62,84 @@ export function SettingsModal() {
         <h2 className="mb-4 text-lg font-semibold text-ink">Settings</h2>
 
         <div className="flex flex-col gap-4">
-          <Field label="Ideogram API key">
-            {/* username field helps password managers associate the secret */}
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-ink-faint">
+              API provider
+            </span>
+
+            {/* Nested tabs: the active tab is the backend used for generation. */}
+            <div
+              role="tablist"
+              className="flex items-center gap-1 rounded-md border border-border bg-surface-0 p-1"
+            >
+              {PROVIDER_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={provider === t.id}
+                  onClick={() => setProvider(t.id)}
+                  className={`flex-1 rounded px-2 py-1 text-xs font-medium transition ${
+                    provider === t.id
+                      ? "bg-accent text-white"
+                      : "text-ink-dim hover:bg-surface-2 hover:text-ink"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {/* One username hint (= provider) lets a password manager keep the two
+                keys as distinct logins. */}
             <input
               type="text"
               name="username"
               autoComplete="username"
-              value="ideogram"
+              value={provider}
               readOnly
               hidden
             />
-            <input
-              type="password"
-              name="password"
-              autoComplete="current-password"
-              className={inputClass}
-              placeholder="Api-Key…"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              autoFocus
-            />
-            <span className="text-xs text-ink-faint">
-              Stored in this browser's localStorage and sent per-request through the proxy. The web
-              platform has no app-readable secret store; your browser's password manager may offer to
-              save it.
-            </span>
-          </Field>
+
+            {provider === "fal" ? (
+              <label className="flex flex-col gap-1">
+                <input
+                  key="fal"
+                  type="password"
+                  name="fal-key"
+                  autoComplete="current-password"
+                  className={inputClass}
+                  placeholder="Fal Api-Key…"
+                  value={falApiKey}
+                  onChange={(e) => setFalApiKey(e.target.value)}
+                  autoFocus
+                />
+                <span className="text-xs text-ink-faint">
+                  Called directly from your browser (no proxy) — get one at{" "}
+                  <span className="text-ink-dim">fal.ai/dashboard/keys</span>. Stored in this
+                  browser's localStorage.
+                </span>
+              </label>
+            ) : (
+              <label className="flex flex-col gap-1">
+                <input
+                  key="ideogram"
+                  type="password"
+                  name="ideogram-key"
+                  autoComplete="current-password"
+                  className={inputClass}
+                  placeholder="Ideogram Api-Key…"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  autoFocus
+                />
+                <span className="text-xs text-ink-faint">
+                  Relayed per-request through this app's proxy to Ideogram. Stored in this browser's
+                  localStorage.
+                </span>
+              </label>
+            )}
+          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Default resolution">

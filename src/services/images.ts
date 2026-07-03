@@ -49,6 +49,20 @@ export async function downloadAndStore(sourceUrl: string): Promise<StoredImage> 
 }
 
 /**
+ * Like `downloadAndStore`, but fetches the URL directly (no `/api/image` proxy).
+ * Used for Fal.ai results, which are served with permissive CORS — and are `data:`
+ * URIs when we request sync_mode — so they need no server relay.
+ */
+export async function downloadAndStoreDirect(sourceUrl: string): Promise<StoredImage> {
+  const res = await fetch(sourceUrl);
+  if (!res.ok) {
+    throw new Error(`Failed to download image: ${res.status} ${res.statusText}`);
+  }
+  const blob = await res.blob();
+  return storeImageBlob(blob);
+}
+
+/**
  * Store an already-in-hand Blob (e.g. from zip import) under a new imageId,
  * generate + store a thumbnail, and return the ids + natural dimensions.
  */

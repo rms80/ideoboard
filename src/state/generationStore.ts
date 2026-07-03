@@ -12,7 +12,8 @@ import { useSceneStore, currentNode } from "./sceneStore";
 import { clonePrompt } from "./factory";
 import { useSettingsStore } from "./settingsStore";
 import { generateImage } from "../services/ideogram";
-import { downloadAndStore, storeImageBlob } from "../services/images";
+import { generateImageViaFal } from "../services/fal";
+import { downloadAndStore, downloadAndStoreDirect, storeImageBlob } from "../services/images";
 import { renderMockImage } from "../services/mockImage";
 import { newId } from "../util/id";
 
@@ -117,9 +118,11 @@ async function runTask(task: Task): Promise<void> {
   if (!node) return;
 
   const settings = useSettingsStore.getState();
-  if (!settings.apiKey) {
-    // Testing mode: no API key → synthesize a placeholder image locally so the
-    // full Generate / Regenerate / branch flow can be exercised offline.
+  const usingFal = settings.provider === "fal";
+  const apiKey = usingFal ? settings.falApiKey : settings.apiKey;
+  if (!apiKey) {
+    // Testing mode: no API key for the active provider → synthesize a placeholder
+    // image locally so the full Generate / Regenerate / branch flow works offline.
     const { blob } = await renderMockImage(node.prompt);
     const stored = await storeImageBlob(blob);
     const result: GenerationResult = {
@@ -136,18 +139,20 @@ async function runTask(task: Task): Promise<void> {
     return;
   }
 
-  const resp = await generateImage(
-    node.prompt,
-    settings.apiKey,
-    settings.enableCopyrightDetection
-  );
+  const resp = usingFal
+    ? await generateImageViaFal(node.prompt, apiKey)
+    : await generateImage(node.prompt, apiKey, settings.enableCopyrightDetection);
 
   if (resp.data.length === 0) {
-    throw new Error("Ideogram returned no images.");
+    throw new Error(usingFal ? "Fal.ai returned no images." : "Ideogram returned no images.");
   }
 
   for (const img of resp.data) {
-    const stored = await downloadAndStore(img.url);
+    // Fal serves CORS-enabled (data:) URLs → fetch directly; Ideogram URLs are
+    // CORS-blocked + expiring → relay through the /api/image proxy.
+    const stored = usingFal
+      ? await downloadAndStoreDirect(img.url)
+      : await downloadAndStore(img.url);
     const result: GenerationResult = {
       id: newId(),
       imageId: stored.imageId,
@@ -157,7 +162,8 @@ async function runTask(task: Task): Promise<void> {
       isImageSafe: img.is_image_safe,
       promptSnapshot: clonePrompt(node.prompt),
       createdAt: Date.now(),
-      sourceUrl: img.url,
+      // Fal's is a transient data: URI (huge, not a stable ref) → don't persist it.
+      sourceUrl: usingFal ? undefined : img.url,
     };
     useSceneStore.getState().appendResult(task.nodeId, result);
   }

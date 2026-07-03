@@ -93,7 +93,9 @@ export function ResultCycler() {
     null;
   const nextIsEmpty = !!nextId && (scene?.nodes[nextId]?.results.length ?? 0) === 0;
   const primaryLabel = busy ? "Generating…" : hasImage ? "Regenerate" : "Generate";
-  const iterateLabel = hasChildren ? "Branch" : "Edit";
+  // "Branch" when a divergent child makes sense; otherwise "Next" (create+go to the
+  // continuation, or just the disabled placeholder on a not-yet-generated node).
+  const iterateLabel = hasChildren ? "Branch" : "Next";
 
   return (
     // Generate is the only in-flow child (justify-center) → dead-centered + defines
@@ -173,7 +175,7 @@ export function ResultCycler() {
         </ToggleBtn>
       </div>
 
-      {/* Right: Next (go to the empty continuation) / Branch / Edit */}
+      {/* Right: Next (go to the empty continuation) / Branch */}
       <div className="absolute right-0 top-1/2 -translate-y-1/2">
         {nextIsEmpty ? (
           <Button

@@ -13,7 +13,7 @@ A **frontend-only** web app for *iterative* image generation with **Ideogram v4*
 - **Graph view** — a React Flow node graph visualizing the **iteration history**. Nodes don't pass data; every prompt change is a step, and branching from any step starts a new line.
 - **Focus view** — zoom into one image and edit a **structured prompt**: a base prompt, **bounding boxes** (text boxes + image/object boxes drawn over the image), and reusable **tag fragments** (named `#macros` referenced from any field).
 
-Everything is serializable to JSON + images, auto-saved to IndexedDB, multi-scene, exportable as a zip. Calls go through a tiny serverless proxy (no direct browser→Ideogram).
+Everything is serializable to JSON + images, auto-saved to IndexedDB, multi-scene, exportable as a zip. Generation runs against one of **two selectable backends** (see §6): **Fal.ai** (default, called directly from the browser) or **Ideogram** (relayed through a tiny serverless proxy).
 
 ---
 
@@ -52,7 +52,7 @@ src/
   types/index.ts        data model + Ideogram wire types + RESOLUTIONS/SPEEDS enums
   util/                 id.ts (newId), misc.ts (clamp, debounce)
   state/                Zustand stores (see "State" below) + factory.ts
-  services/             db, images, ideogram, mockImage, tags, layout, persistence, exchange
+  services/             db, images, ideogram, fal, mockImage, tags, layout, persistence, exchange
   hooks/                useObjectUrl, useUndo, useKeyboardShortcuts, useImageActions
   components/
     AppShell, LeftBar, RightBar, SettingsModal
@@ -77,11 +77,11 @@ Scenes store **our own format** (`StructuredPrompt` / `PromptBox` / `PromptTag`)
 - current node has **0 results** → commit draft into this node, fill its first result
 - has results (prompt **locked**) → **append another result** (regenerate, new seed)
 
-There is **no implicit branch-on-edit** — branching is explicit via the Edit/Branch button (`createChildFromDraft`). `Regenerate` always appends to the current node using its committed prompt. A concurrency-limited queue (**≤10 in-flight**, matches Ideogram's default rate limit) runs tasks; each returned image → `downloadAndStore()` → `GenerationResult`.
+There is **no implicit branch-on-edit** — branching is explicit via the Edit/Branch button (`createChildFromDraft`). `Regenerate` always appends to the current node using its committed prompt. A concurrency-limited queue (**≤10 in-flight**, matches Ideogram's default rate limit) runs tasks; `runTask` dispatches to the **active provider** (§6) and each returned image → `download*` → `GenerationResult`.
 
 **Freeze → auto-advance.** A node **freezes** the moment its first result lands (the 0→1 transition, from generate *or* upload/paste). `appendResult` detects this and calls `advanceAfterFreeze(nodeId)`, which **auto-creates its editable continuation child in the background** (same committed prompt, inherited note) **without moving focus** — you keep looking at the image you just made; the child appears in the graph. Any **guide image is copied to the child** (fresh blob id → independent lifecycle) as a reference for the next prompt. In the focus view the right-hand button becomes **"Next"** (navigate to that empty child) instead of Branch until the child itself has an image.
 
-**Testing mode:** when no `apiKey` is set, `runTask` does **not** error — it synthesizes a placeholder image locally via `services/mockImage.ts` (`renderMockImage`): random background, each obj box filled (its color or random) with its label drawn on top, each text box's literal text drawn centered, at the prompt's resolution. Lets the whole Generate/Regenerate/branch flow be exercised offline.
+**Testing mode:** when the **active provider's** key is unset, `runTask` does **not** error — it synthesizes a placeholder image locally via `services/mockImage.ts` (`renderMockImage`): random background, each obj box filled (its color or random) with its label drawn on top, each text box's literal text drawn centered, at the prompt's resolution. Lets the whole Generate/Regenerate/branch flow be exercised offline.
 
 ### 4. Undo/redo (zundo) — what is and isn't tracked
 History tracks **content edits**: `draft` text/box/tag edits and **branch creation**. It does **not** track navigation, result appends, result-index, layout positions, or viewport — those go through the `withoutHistory()` helper (pauses the zundo temporal store). Rapid edits are grouped into one undo entry via a leading-throttle on `handleSet` (~350ms). When adding new mutations, decide deliberately: undoable → plain action; transient → wrap in `withoutHistory`.
@@ -89,8 +89,13 @@ History tracks **content edits**: `draft` text/box/tag edits and **branch creati
 ### 5. Persistence
 `sceneStore` blobs are **references only** (`imageId`/`thumbnailId`). Image **bytes live in IndexedDB** (`db.ts`: `scenes` / `images` / `thumbnails` stores). Autosave: `persistence.ts` subscribes to `sceneStore`, debounces ~600ms, writes scene JSON (image blobs written once at generation time). `viewport` lives in `uiStore` (not the tracked scene) and is merged into the scene only at save time. Settings persist to localStorage (zustand `persist`).
 
-### 6. The proxy (why "always proxy")
-Secret-key image APIs omit CORS and serve images from hosts we don't control. `POST /api/generate` relays the multipart body to Ideogram with the user's key (`X-Api-Key` request header → `Api-Key` upstream; **no server secret**). `GET /api/image?url=` server-fetches the expiring image and streams it back with CORS so the client can `fetch → blob → IndexedDB`. Dev and prod run the *same* `api/handlers.ts`.
+### 6. Generation providers (Fal.ai / Ideogram) & the proxy
+`settingsStore.provider` (`"fal" | "ideogram"`, **default `fal`**) selects the backend; it mirrors the active tab in the Settings dialog and each provider has its own key (`falApiKey` / `apiKey`). `runTask` (`generationStore`) branches on it. Both paths build the **same** `promptToV4Json(prompt)` — the only difference is the wire transport and how images come back.
+
+- **Fal.ai (default) — direct, no proxy** (`services/fal.ts`). fal supports CORS, so the browser calls it directly via the **queue REST API**: `POST https://queue.fal.run/ideogram/v4` (`Authorization: Key <falApiKey>`) → poll `status_url` until `COMPLETED` → GET `response_url`. fal's endpoint takes only a flat **`prompt` string**, so we send the **stringified** `V4JsonPrompt` (`JSON.stringify(promptToV4Json(prompt))`) — Ideogram v4 was trained on that JSON layout schema and fal forwards the raw string verbatim (it must match the schema or the reference pipeline rejects it). We request **`sync_mode: true`** so results return as `data:` URIs (zero media-host CORS dependency); they're stored via **`downloadAndStoreDirect()`** (plain `fetch`, no `/api/image`). Enum mapping: speed `DEFAULT→BALANCED`; resolution `"WxH"` → `{width,height}`. The transient data-URI `sourceUrl` is **not** persisted.
+- **Ideogram — via the proxy** (the "always proxy" path). Secret-key image APIs omit CORS and serve images from hosts we don't control. `POST /api/generate` relays the multipart body to Ideogram with the user's key (`X-Api-Key` request header → `Api-Key` upstream; **no server secret**). `GET /api/image?url=` server-fetches the expiring image and streams it back with CORS so the client can `fetch → blob → IndexedDB` (via `downloadAndStore()`). Dev and prod run the *same* `api/handlers.ts`.
+
+Deploying with **only Fal** needs no serverless functions at all — the `api/*` proxy exists solely for the Ideogram path.
 
 ### 7. Focus-view overlays, guide images & shared UI
 - **Overlay toggles** (`uiStore`): `showImage` / `showPrompts` / `showGuide` (the pill-row under the image in `ResultCycler`). Image/Prompts are coupled ("never both off"); **`showGuide` is independent**. Render precedence in `ImageStage`: shown image wins → `url && showImage`, else `guideUrl && showGuide`, else placeholder.
@@ -109,11 +114,11 @@ Secret-key image APIs omit CORS and serve images from hosts we don't control. `P
 
 **`generationStore`** — `status`/`errors`/`inflight` + `generate()`, `regenerate(nodeId?)`, `clearError(nodeId)`.
 
-**`settingsStore`** (localStorage) — `apiKey`, `defaultResolution`, `defaultRenderingSpeed`, `enableCopyrightDetection`.
+**`settingsStore`** (localStorage) — `provider` (`"fal" | "ideogram"`, default `fal`; the active tab = the backend used for generation), `apiKey` (Ideogram), `falApiKey` (Fal.ai), `defaultResolution`, `defaultRenderingSpeed`, `enableCopyrightDetection`.
 
 **`uiStore`** (transient) — `viewMode`, `settingsOpen`, overlay toggles `showImage/showPrompts/showGuide` (see §7), `lightboxOpen`, box/tag selection, `inspectorBoxId`, `focusBoxNonce`, `pendingBoxId` (just-drawn blank box → backspace/undo in its empty Description cancels it), typed `clipboard` (`{kind:"boxes"|"tags", items}`), `viewport`. Box interaction is modeless (no tool palette) — see `BoxLayer`. Its pointer surface spans the **whole middle viewport** (the letterbox around the image is canvas too); coordinates map to the image rect (passed in as `imageBox`) and are *not* clamped (letterbox → values <0 / >1000). Hover a border (or a selected box's interior) → grab cursor; drag **from a border, or inside a selected box,** moves; drag a handle resizes; drag inside the image (incl. an *unselected* box) draws (obj by default, press `t` mid-draw to toggle text/obj); **drag in the letterbox, or shift+drag, marquees** (may start/end outside the image); click selects (border→containment), click in empty/letterbox clears.
 
-**Services** — `tags.ts`: `resolveText/extractTagRefs/parseTagLine/formatTagLine/isValidTagName/findUndefinedRefs` (all pure). `layout.ts`: `computeLayout(nodes, rootId)` (pure). `ideogram.ts`: `promptToV4Json/buildFormData/generateImage`. `images.ts`: `downloadAndStore/storeImageBlob/get*ObjectURL/revoke*`. `db.ts`: scene + blob CRUD. `exchange.ts`: `exportSceneZip/downloadSceneZip/importSceneZip`.
+**Services** — `tags.ts`: `resolveText/extractTagRefs/parseTagLine/formatTagLine/isValidTagName/findUndefinedRefs` (all pure). `layout.ts`: `computeLayout(nodes, rootId)` (pure). `ideogram.ts`: `promptToV4Json/buildFormData/generateImage` (+ the `IdeogramResponse` shape both providers return). `fal.ts`: `generateImageViaFal(prompt, falApiKey)` — direct queue-API call, returns an `IdeogramResponse` (see §6). `images.ts`: `downloadAndStore` (via proxy) / `downloadAndStoreDirect` (Fal, direct) / `storeImageBlob/get*ObjectURL/revoke*`. `db.ts`: scene + blob CRUD. `exchange.ts`: `exportSceneZip/downloadSceneZip/importSceneZip`.
 
 **`TagField`** (frozen prop contract — used by all free-text prompt fields and box fields; new props are **additive only**):
 ```ts
@@ -144,6 +149,7 @@ These are **best-guess and may need adjusting on the first real Ideogram call** 
 2. **`json_prompt` is sent as a string multipart field** (`buildFormData` in `ideogram.ts`). If rejected, try a Blob/file part.
 3. **`/api/image` host allow-list** (`api/handlers.ts` → `isAllowedImageHost`) covers `*.ideogram.ai`, `*.ideogramusercontent.com`, and common CDNs (amazonaws/cloudfront/googleapis). If image downloads 403, widen it.
 4. "Image box" = a region *described in words* — Ideogram v4 `generate` has no per-region reference-image upload (that's a different endpoint, future work).
+5. **Fal endpoint id, enum names & `sync_mode`** (`services/fal.ts`) — the queue path (`queue.fal.run/ideogram/v4`), the `image_size`/`rendering_speed` enum names, and passing the stringified `json_prompt` as `prompt` are per the fal docs; if a live call 404s/rejects, that file is the single place to adjust. Fal images are stored **directly** (data URIs via `sync_mode`), so they don't touch the `/api/image` allow-list.
 
 ---
 
@@ -151,4 +157,4 @@ These are **best-guess and may need adjusting on the first real Ideogram call** 
 
 - ✅ Run dev on **6868**; verify with `npm run build`; keep the source-of-truth + draft invariants.
 - ✅ When adding store mutations, classify them as undoable vs `withoutHistory`.
-- ❌ Don't add a test framework. ❌ Don't make the browser call Ideogram directly (always via `/api`). ❌ Don't persist `draft` or the derived `V4JsonPrompt`. ❌ Don't store image bytes in scene JSON (references only).
+- ❌ Don't add a test framework. ❌ Don't route the **Ideogram** path around `/api` (its hosts lack CORS) — but **Fal.ai is called directly from the browser on purpose** (§6). ❌ Don't persist `draft` or the derived `V4JsonPrompt`. ❌ Don't store image bytes in scene JSON (references only).
