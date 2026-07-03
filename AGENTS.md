@@ -53,12 +53,13 @@ src/
   util/                 id.ts (newId), misc.ts (clamp, debounce)
   state/                Zustand stores (see "State" below) + factory.ts
   services/             db, images, ideogram, mockImage, tags, layout, persistence, exchange
-  hooks/                useObjectUrl, useUndo, useKeyboardShortcuts
+  hooks/                useObjectUrl, useUndo, useKeyboardShortcuts, useImageActions
   components/
-    AppShell, TopBar, SettingsModal
-    common/             ui.tsx (primitives), TagField.tsx, ContextMenu.tsx
+    AppShell, LeftBar, RightBar, SettingsModal
+    common/             ui.tsx (primitives), TagField.tsx, ContextMenu.tsx,
+                        AppTooltips.tsx (global fast title-tooltip)
     focus/              FocusView, ImageStage, BoxLayer, BoxItem, BoxPanel,
-                        PromptPanel, TagsPanel, ResultCycler, Breadcrumb
+                        PromptPanel, TagsPanel, ResultCycler, StatusBar, Lightbox
     graph/              GraphView, GraphNode
 ```
 
@@ -73,12 +74,12 @@ Scenes store **our own format** (`StructuredPrompt` / `PromptBox` / `PromptTag`)
 `sceneStore` holds `{ scene, draft }`. The focus editor edits **`draft`** — a working copy of the current node's prompt. `node.prompt` is the **committed** prompt that produced the node's results. Navigating to a node resets `draft` to a clone of that node's `prompt`. `draft` is **not** persisted (it's editor state).
 
 ### 3. Generation flow (`generationStore.generate()`)
-Compares `draft` ↔ committed (`isDraftDirty()`):
 - current node has **0 results** → commit draft into this node, fill its first result
-- has results **and draft changed** → **branch a new child node** (deep copy of draft) and generate
-- has results **and draft unchanged** → **regenerate** (append a result, new seed)
+- has results (prompt **locked**) → **append another result** (regenerate, new seed)
 
-`Regenerate` always appends to the current node using its committed prompt. A concurrency-limited queue (**≤10 in-flight**, matches Ideogram's default rate limit) runs tasks; each returned image → `downloadAndStore()` → `GenerationResult`.
+There is **no implicit branch-on-edit** — branching is explicit via the Edit/Branch button (`createChildFromDraft`). `Regenerate` always appends to the current node using its committed prompt. A concurrency-limited queue (**≤10 in-flight**, matches Ideogram's default rate limit) runs tasks; each returned image → `downloadAndStore()` → `GenerationResult`.
+
+**Freeze → auto-advance.** A node **freezes** the moment its first result lands (the 0→1 transition, from generate *or* upload/paste). `appendResult` detects this and calls `advanceAfterFreeze(nodeId)`, which **auto-creates its editable continuation child in the background** (same committed prompt, inherited note) **without moving focus** — you keep looking at the image you just made; the child appears in the graph. Any **guide image is copied to the child** (fresh blob id → independent lifecycle) as a reference for the next prompt. In the focus view the right-hand button becomes **"Next"** (navigate to that empty child) instead of Branch until the child itself has an image.
 
 **Testing mode:** when no `apiKey` is set, `runTask` does **not** error — it synthesizes a placeholder image locally via `services/mockImage.ts` (`renderMockImage`): random background, each obj box filled (its color or random) with its label drawn on top, each text box's literal text drawn centered, at the prompt's resolution. Lets the whole Generate/Regenerate/branch flow be exercised offline.
 
@@ -91,11 +92,18 @@ History tracks **content edits**: `draft` text/box/tag edits and **branch creati
 ### 6. The proxy (why "always proxy")
 Secret-key image APIs omit CORS and serve images from hosts we don't control. `POST /api/generate` relays the multipart body to Ideogram with the user's key (`X-Api-Key` request header → `Api-Key` upstream; **no server secret**). `GET /api/image?url=` server-fetches the expiring image and streams it back with CORS so the client can `fetch → blob → IndexedDB`. Dev and prod run the *same* `api/handlers.ts`.
 
+### 7. Focus-view overlays, guide images & shared UI
+- **Overlay toggles** (`uiStore`): `showImage` / `showPrompts` / `showGuide` (the pill-row under the image in `ResultCycler`). Image/Prompts are coupled ("never both off"); **`showGuide` is independent**. Render precedence in `ImageStage`: shown image wins → `url && showImage`, else `guideUrl && showGuide`, else placeholder.
+- **Guide image** = a faint reference behind the prompt boxes (`node.guideImageId`, stored raw — no square-pad/thumbnail). It can exist on **any** node; it's only *drawn* when the result image is hidden, but its menu actions (copy/remove; paste only pre-generation) stay available whenever one exists. Copying a guide always **duplicates the blob under a new id** so lifecycles don't entangle.
+- **`useImageActions`** hook is the single source for image-context actions (fullscreen/download/copy prompt/copy image/paste·upload image/guide ops) via `buildMenuItems()` — shared by the `ImageStage` right-click menu and the `StatusBar` ⋮ button so they never drift.
+- **`ContextMenu`** supports `MenuSeparator` entries and per-item `tooltip`.
+- **`AppTooltips`** (mounted once in `AppShell`): a global renderer that hijacks every `title` attribute to show a custom tooltip ~2× faster than the browser's fixed native delay. No per-component change needed — just set `title`.
+
 ---
 
 ## Store & service contracts (public surface)
 
-**`sceneStore`** (`state/sceneStore.ts`) — `{ scene, draft }` + actions: `setScene`, `selectNode`, `editDraft(recipe)`, `addBox/addBoxes/updateBox/removeBoxes`, `addTag/addTags/updateTag/removeTags`, `renameWorkingScene`, `commitDraftToCurrentNode`, `createChildFromDraft`, `appendResult`, `setCurrentResultIndex`, `recomputeLayout`. Module fns: `currentNode(scene)`, `isDraftDirty()`, `undo()`, `redo()`. Undo state via `useUndoState()` hook.
+**`sceneStore`** (`state/sceneStore.ts`) — `{ scene, draft }` + actions: `setScene`, `selectNode`, `editDraft(recipe)`, `setRenderingSpeed`, `addBox/addBoxes/updateBox/removeBoxes`, `moveBoxZ`, `discardDrawnBox`, `addTag/addTags/updateTag/removeTags`, `renameWorkingScene`, `commitDraftToCurrentNode`, `createChildFromDraft`, `advanceAfterFreeze` (see §3), `appendResult`, `setGuideImage`, `setCurrentResultIndex`, `setNodeNote`, `recomputeLayout`. Module fns: `currentNode(scene)`, `isDraftDirty()`, `undo()`, `redo()`. `useCurrentNodeLocked()` hook: a node's prompt is **locked** once it has ≥1 result. Undo state via `useUndoState()` hook.
 
 **`scenesStore`** — `scenes[]`, `currentSceneId`, `refresh/createScene/switchScene/deleteScene/renameScene/exportCurrent/importZip`. Deleting a scene GCs orphan blobs (only those no other scene references).
 
@@ -103,15 +111,18 @@ Secret-key image APIs omit CORS and serve images from hosts we don't control. `P
 
 **`settingsStore`** (localStorage) — `apiKey`, `defaultResolution`, `defaultRenderingSpeed`, `enableCopyrightDetection`.
 
-**`uiStore`** (transient) — `viewMode`, `settingsOpen`, box/tag selection, `inspectorBoxId`, `focusBoxNonce`, `pendingBoxId` (just-drawn blank box → backspace/undo in its empty Description cancels it), typed `clipboard` (`{kind:"boxes"|"tags", items}`), `viewport`. Box interaction is modeless (no tool palette) — see `BoxLayer`. Its pointer surface spans the **whole middle viewport** (the letterbox around the image is canvas too); coordinates map to the image rect (passed in as `imageBox`) and are *not* clamped (letterbox → values <0 / >1000). Hover a border (or a selected box's interior) → grab cursor; drag **from a border, or inside a selected box,** moves; drag a handle resizes; drag inside the image (incl. an *unselected* box) draws (obj by default, press `t` mid-draw to toggle text/obj); **drag in the letterbox, or shift+drag, marquees** (may start/end outside the image); click selects (border→containment), click in empty/letterbox clears.
+**`uiStore`** (transient) — `viewMode`, `settingsOpen`, overlay toggles `showImage/showPrompts/showGuide` (see §7), `lightboxOpen`, box/tag selection, `inspectorBoxId`, `focusBoxNonce`, `pendingBoxId` (just-drawn blank box → backspace/undo in its empty Description cancels it), typed `clipboard` (`{kind:"boxes"|"tags", items}`), `viewport`. Box interaction is modeless (no tool palette) — see `BoxLayer`. Its pointer surface spans the **whole middle viewport** (the letterbox around the image is canvas too); coordinates map to the image rect (passed in as `imageBox`) and are *not* clamped (letterbox → values <0 / >1000). Hover a border (or a selected box's interior) → grab cursor; drag **from a border, or inside a selected box,** moves; drag a handle resizes; drag inside the image (incl. an *unselected* box) draws (obj by default, press `t` mid-draw to toggle text/obj); **drag in the letterbox, or shift+drag, marquees** (may start/end outside the image); click selects (border→containment), click in empty/letterbox clears.
 
 **Services** — `tags.ts`: `resolveText/extractTagRefs/parseTagLine/formatTagLine/isValidTagName/findUndefinedRefs` (all pure). `layout.ts`: `computeLayout(nodes, rootId)` (pure). `ideogram.ts`: `promptToV4Json/buildFormData/generateImage`. `images.ts`: `downloadAndStore/storeImageBlob/get*ObjectURL/revoke*`. `db.ts`: scene + blob CRUD. `exchange.ts`: `exportSceneZip/downloadSceneZip/importSceneZip`.
 
-**`TagField`** (frozen prop contract — used by all free-text prompt fields and box fields):
+**`TagField`** (frozen prop contract — used by all free-text prompt fields and box fields; new props are **additive only**):
 ```ts
-{ value, onChange, tags, multiline?, placeholder?, className?, ariaLabel?, disabled?, onDropTag? }
+{ value, onChange, tags, multiline?, placeholder?, className?, ariaLabel?, disabled?,
+  onDropTag?, expandable?, expandAnchor? /* "left" | "right" */ }
 ```
 Stores **plain text** with `#name` tokens; chips/preview are render-only. Tag drag mime: `application/x-ideoboard-tag` (payload = bare name).
+
+`expandable` makes focusing the field pop up a larger floating editor (portaled to `<body>`) that becomes the live editor while open — 2× wide, ≥8 lines, ≥ the source's height, grows 4 lines at a time on overflow, pinned to the source's top-left (or top-**right** for `expandAnchor="right"`, used by the right-hand panel). It shows the placeholder as a docked label tab and an "escape/tab to close" hint. All tag behaviour works inside it. Panels tag their fields (`data-fieldnav`) and wrap them in a `data-field-group`; **Tab / Shift-Tab cycles between a group's fields** instead of leaking into browser chrome.
 
 ---
 

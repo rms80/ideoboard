@@ -4,6 +4,7 @@
 // StatusBar toolbar buttons so the two stay in lock-step.
 import { useEffect, useRef, useState } from "react";
 import type { GenerationResult } from "../types";
+import type { MenuEntry } from "../components/common/ContextMenu";
 import { useSceneStore } from "../state/sceneStore";
 import { useUiStore } from "../state/uiStore";
 import { clonePrompt } from "../state/factory";
@@ -20,9 +21,12 @@ export function useImageActions() {
   const result =
     node && node.results.length ? node.results[node.currentResultIndex] : undefined;
   const url = useObjectUrl(result?.imageId, "image");
-  // Guide image is only meaningful before a result exists (hidden once generated).
+  // A guide image can exist on any node. It's only DRAWN when the result image is
+  // hidden (ImageStage: image wins when both are shown), but its menu actions stay
+  // available whenever one exists. `isEmptyNode` still gates pasting a new guide.
   const isEmptyNode = !!node && node.results.length === 0;
-  const guideUrl = useObjectUrl(isEmptyNode ? node?.guideImageId : undefined, "image");
+  const hasGuide = !!node?.guideImageId;
+  const guideUrl = useObjectUrl(node?.guideImageId, "image");
   const openLightbox = useUiStore((s) => s.openLightbox);
 
   // "Copied prompt" flash for the copy button (auto-clears).
@@ -171,6 +175,92 @@ export function useImageActions() {
     await deleteImageBlob(prev);
   };
 
+  // Copy the current node's guide image to the clipboard (as PNG), mirroring
+  // copyImage but sourced from the guide blob instead of a result.
+  const copyGuideImage = async () => {
+    const s0 = useSceneStore.getState();
+    const nodeId = s0.scene?.currentNodeId;
+    const guideId = nodeId ? s0.scene?.nodes[nodeId]?.guideImageId : undefined;
+    if (!guideId) return;
+    const blob = await getImage(guideId);
+    if (!blob) return;
+    try {
+      const png = await toPngBlob(blob);
+      if (!png) return;
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+    } catch {
+      // Clipboard image write denied / unsupported — no-op.
+    }
+  };
+
+  // The action list shared by the ImageStage right-click menu and the StatusBar
+  // "more actions" button, so the two always offer exactly the same options.
+  // Grouped: displayed-result actions, then import actions, then guide-image
+  // actions (only on a not-yet-generated node).
+  const buildMenuItems = (): MenuEntry[] => {
+    const items: MenuEntry[] = [
+      {
+        label: "View fullscreen",
+        tooltip: "Open the image in the fullscreen viewer",
+        onSelect: () => openLightbox(),
+        disabled: !url,
+      },
+      {
+        label: "Download image",
+        tooltip: "Save the image to a file",
+        onSelect: () => void downloadImage(),
+        disabled: !url,
+      },
+      {
+        label: "Copy prompt",
+        tooltip: "Copy the Ideogram prompt JSON to the clipboard",
+        onSelect: () => void copyPrompt(),
+        disabled: !promptSource,
+      },
+      {
+        label: "Copy image",
+        tooltip: "Copy the image to the clipboard",
+        onSelect: () => void copyImage(),
+        disabled: !url,
+      },
+      { separator: true },
+      {
+        label: "Paste image",
+        tooltip: "Paste a clipboard image as this node's result",
+        onSelect: () => void pasteImage(),
+      },
+      {
+        label: "Upload image…",
+        tooltip: "Pick an image file to use as this node's result",
+        onSelect: () => uploadImage(),
+      },
+    ];
+    if (isEmptyNode || hasGuide) {
+      items.push({ separator: true });
+      // Pasting seeds/replaces the guide — only meaningful before a result exists.
+      if (isEmptyNode) {
+        items.push({
+          label: "Paste guide image",
+          tooltip: "Paste a clipboard image as a faint reference to help compose the prompt",
+          onSelect: () => void pasteGuideImage(),
+        });
+      }
+      if (hasGuide) {
+        items.push({
+          label: "Copy guide image",
+          tooltip: "Copy the guide image to the clipboard",
+          onSelect: () => void copyGuideImage(),
+        });
+        items.push({
+          label: "Remove guide image",
+          tooltip: "Delete this node's guide image",
+          onSelect: () => void removeGuideImage(),
+        });
+      }
+    }
+    return items;
+  };
+
   return {
     result,
     url,
@@ -186,5 +276,7 @@ export function useImageActions() {
     pasteImage,
     pasteGuideImage,
     removeGuideImage,
+    copyGuideImage,
+    buildMenuItems,
   };
 }

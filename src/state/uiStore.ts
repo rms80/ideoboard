@@ -40,9 +40,11 @@ interface UiState {
   tagEditRequest: { id: ID; seedHash: boolean } | null;
   clipboard: Clipboard;
   viewport: Viewport;
-  // Focus-view overlay visibility toggles (the rendered image / the box overlays).
+  // Focus-view overlay visibility toggles (the rendered image / the box overlays /
+  // the faint guide-image reference).
   showImage: boolean;
   showPrompts: boolean;
+  showGuide: boolean;
   // Fullscreen image lightbox (modal pan/zoom of the current node's active result).
   lightboxOpen: boolean;
 
@@ -50,8 +52,10 @@ interface UiState {
   toggleViewMode: () => void;
   toggleShowImage: () => void;
   toggleShowPrompts: () => void;
+  toggleShowGuide: () => void;
   setShowImage: (v: boolean) => void;
   setShowPrompts: (v: boolean) => void;
+  setShowGuide: (v: boolean) => void;
   openSettings: () => void;
   closeSettings: () => void;
   openLightbox: () => void;
@@ -88,6 +92,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   viewport: { x: 0, y: 0, zoom: 1 },
   showImage: true,
   showPrompts: true,
+  showGuide: true,
   lightboxOpen: false,
 
   setViewMode: (viewMode) => set({ viewMode }),
@@ -103,8 +108,12 @@ export const useUiStore = create<UiState>((set, get) => ({
       const showPrompts = !s.showPrompts;
       return showPrompts || s.showImage ? { showPrompts } : { showPrompts, showImage: true };
     }),
+  // Independent of Image/Prompts (no "never both off" coupling — for now toggling
+  // the guide doesn't touch the other overlays).
+  toggleShowGuide: () => set((s) => ({ showGuide: !s.showGuide })),
   setShowImage: (showImage) => set({ showImage }),
   setShowPrompts: (showPrompts) => set({ showPrompts }),
+  setShowGuide: (showGuide) => set({ showGuide }),
   openSettings: () => set({ settingsOpen: true }),
   closeSettings: () => set({ settingsOpen: false }),
   openLightbox: () => set({ lightboxOpen: true }),

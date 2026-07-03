@@ -6,6 +6,7 @@ import { FocusView } from "./focus/FocusView";
 import { GraphView } from "./graph/GraphView";
 import { SettingsModal } from "./SettingsModal";
 import { Lightbox } from "./focus/Lightbox";
+import { AppTooltips } from "./common/AppTooltips";
 
 export function AppShell() {
   const viewMode = useUiStore((s) => s.viewMode);
@@ -37,6 +38,7 @@ export function AppShell() {
       </main>
       <SettingsModal />
       <Lightbox />
+      <AppTooltips />
     </div>
   );
 }

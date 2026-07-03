@@ -16,10 +16,11 @@ export function PromptPanel() {
   const tags = draft.tags;
 
   return (
-    <div className="flex flex-col gap-[3px] overflow-y-auto px-1 pt-1 pb-3">
+    <div data-field-group className="flex flex-col gap-[3px] overflow-y-auto px-1 pt-1 pb-3">
       <Field>
         <TagField
           multiline
+          expandable
           disabled={locked}
           tags={tags}
           ariaLabel="Prompt"
@@ -31,6 +32,7 @@ export function PromptPanel() {
 
       <Field>
         <TagField
+          expandable
           disabled={locked}
           tags={tags}
           ariaLabel="Background"
@@ -42,6 +44,7 @@ export function PromptPanel() {
 
       <Field>
         <TagField
+          expandable
           disabled={locked}
           tags={tags}
           ariaLabel="Medium"
@@ -57,6 +60,7 @@ export function PromptPanel() {
       </Field>
       <Field>
         <TagField
+          expandable
           disabled={locked}
           tags={tags}
           ariaLabel="Art style"
@@ -72,6 +76,7 @@ export function PromptPanel() {
       </Field>
       <Field>
         <TagField
+          expandable
           disabled={locked}
           tags={tags}
           ariaLabel="Aesthetics"
@@ -87,6 +92,7 @@ export function PromptPanel() {
       </Field>
       <Field>
         <TagField
+          expandable
           disabled={locked}
           tags={tags}
           ariaLabel="Lighting"

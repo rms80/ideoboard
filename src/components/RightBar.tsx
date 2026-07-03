@@ -1,5 +1,5 @@
 // Right half of the top bar — sits above the focus view's right panel (and at
-// the top-right in graph mode). Export/import + undo/redo + graph toggle +
+// the top-right in graph mode). Graph toggle + undo/redo + export/import +
 // settings, right-aligned.
 import { useRef } from "react";
 import type { ChangeEvent } from "react";
@@ -25,6 +25,25 @@ export function RightBar() {
 
   return (
     <header className="flex h-9 shrink-0 items-center justify-end gap-1 border-b border-border bg-surface-3 px-2">
+      <Button
+        variant="accent"
+        onClick={toggleViewMode}
+        title={viewMode === "graph" ? "Switch to focus view" : "Switch to graph view (⌘G)"}
+      >
+        {viewMode === "graph" ? "Focus View" : "Graph View"}
+      </Button>
+
+      <div className="mx-0.5 h-6 w-px bg-border" />
+
+      <IconButton title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
+        ↶
+      </IconButton>
+      <IconButton title="Redo (⇧⌘Z)" disabled={!canRedo} onClick={redo}>
+        ↷
+      </IconButton>
+
+      <div className="mx-0.5 h-6 w-px bg-border" />
+
       <IconButton title="Export scene (.zip)" onClick={() => void exportCurrent()}>
         ⤓
       </IconButton>
@@ -39,20 +58,6 @@ export function RightBar() {
         onChange={onImportFile}
       />
 
-      <div className="mx-0.5 h-6 w-px bg-border" />
-
-      <IconButton title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
-        ↶
-      </IconButton>
-      <IconButton title="Redo (⇧⌘Z)" disabled={!canRedo} onClick={redo}>
-        ↷
-      </IconButton>
-
-      <div className="mx-0.5 h-6 w-px bg-border" />
-
-      <Button onClick={toggleViewMode}>
-        {viewMode === "graph" ? "Focus" : "Graph"}
-      </Button>
       <IconButton title="Settings" onClick={openSettings}>
         ⚙
       </IconButton>

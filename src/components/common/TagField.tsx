@@ -12,8 +12,12 @@
 //   • resolved-body preview + amber "undefined: #x" flagging below the field,
 //     plus a native title tooltip showing the fully-resolved text.
 //   • right-click "Create tag from selection" via the shared ContextMenu.
+//   • optional `expandable`: focusing the field pops up a larger floating editor
+//     (2× wide, ≥8 lines, ≥ the source's height) that IS the active editor while
+//     open and collapses on Escape/blur (a plain "commit"). All the tag behaviour
+//     above works inside the popup because it shares this component's handlers.
 //
-// The prop contract is FROZEN — do not change it.
+// The existing prop contract is FROZEN — do not change it (new props are additive).
 // ───────────────────────────────────────────────────────────────────────────
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
@@ -38,6 +42,14 @@ const TAG_MIME = "application/x-ideoboard-tag";
 /** Tag-name char class (mirrors services/tags.ts). */
 const NAME_CHAR = /[A-Za-z0-9_-]/;
 
+// Popup editor geometry (px). LINE is the popup's line-height (leading-5); CHROME
+// covers the textarea's border + vertical padding. The popup opens at least
+// MIN_LINES tall and grows STEP_LINES at a time when the content overflows.
+const LINE = 20;
+const CHROME = 12;
+const MIN_LINES = 8;
+const STEP_LINES = 4;
+
 export interface TagFieldProps {
   value: string;
   onChange: (value: string) => void;
@@ -48,6 +60,12 @@ export interface TagFieldProps {
   ariaLabel?: string;
   disabled?: boolean;
   onDropTag?: (tagName: string) => void; // optional override; default appends "#name"
+  // Focusing the field opens a larger floating editor (see file header).
+  expandable?: boolean;
+  // Which edge of the popup pins to the source field: "left" (default) keeps the
+  // left edges aligned and grows rightward; "right" keeps the right edges aligned
+  // and grows leftward (use for fields living in the right-hand panel).
+  expandAnchor?: "left" | "right";
 }
 
 type FieldEl = HTMLInputElement | HTMLTextAreaElement;
@@ -57,6 +75,13 @@ interface MenuState {
   start: number; // index of the '#' that begins the active token
   end: number; // caret index (end of the typed prefix)
   index: number; // highlighted match
+}
+
+interface PopupRect {
+  top: number;
+  left: number;
+  width: number;
+  baseH: number; // minimum height: max(8 lines, source height)
 }
 
 /**
@@ -78,22 +103,43 @@ function getActiveTagQuery(value: string, caret: number): { start: number; query
 }
 
 export function TagField(props: TagFieldProps): JSX.Element {
-  const { value, onChange, tags, multiline = false, placeholder, className, ariaLabel, disabled } =
-    props;
+  const {
+    value,
+    onChange,
+    tags,
+    multiline = false,
+    placeholder,
+    className,
+    ariaLabel,
+    disabled,
+    expandable = false,
+    expandAnchor = "left",
+  } = props;
 
-  const fieldRef = useRef<FieldEl | null>(null);
+  // The in-layout <input>/<textarea>: the anchor for the popup and the editor
+  // when NOT expanded. `popupRef` is the floating editor; `activeField()` returns
+  // whichever one is currently the live editor so all the tag logic below (caret,
+  // autocomplete, context menu) transparently targets it.
+  const sourceRef = useRef<FieldEl | null>(null);
+  const popupRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingCaretRef = useRef<number | null>(null);
+  const caretRef = useRef<{ start: number; end: number } | null>(null);
   const dismissedRef = useRef(false);
 
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [popupRect, setPopupRect] = useState<PopupRect | null>(null);
+  const [popupH, setPopupH] = useState(0);
   // "Convert to tag" modal: captures the selection range + text to replace, then
   // prompts for a name. Null when closed.
   const [convert, setConvert] = useState<{ start: number; end: number; selected: string } | null>(
     null,
   );
   const [convertName, setConvertName] = useState("");
+
+  const activeField = (): FieldEl | null => (expanded ? popupRef.current : sourceRef.current);
 
   const addTag = useSceneStore((s) => s.addTag);
   const setSelectedTags = useUiStore((s) => s.setSelectedTags);
@@ -126,21 +172,23 @@ export function TagField(props: TagFieldProps): JSX.Element {
   // Re-apply caret after a controlled value swap (autocomplete completion).
   useLayoutEffect(() => {
     const pos = pendingCaretRef.current;
-    if (pos != null && fieldRef.current) {
-      fieldRef.current.focus();
-      fieldRef.current.setSelectionRange(pos, pos);
+    const el = activeField();
+    if (pos != null && el) {
+      el.focus();
+      el.setSelectionRange(pos, pos);
       pendingCaretRef.current = null;
     }
   });
 
-  // Anchor the autocomplete dropdown below the field (portal → escapes overflow).
+  // Anchor the autocomplete dropdown below the ACTIVE field (portal → escapes
+  // overflow). When expanded this tracks the popup textarea.
   useLayoutEffect(() => {
     if (!menu) {
       setRect(null);
       return;
     }
     const update = () => {
-      const el = fieldRef.current;
+      const el = activeField();
       if (el) {
         const r = el.getBoundingClientRect();
         setRect({ top: r.bottom + 2, left: r.left, width: r.width });
@@ -155,10 +203,88 @@ export function TagField(props: TagFieldProps): JSX.Element {
     };
     // Reposition when the field can move/grow (value change → textarea growth).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [menu !== null, value]);
+  }, [menu !== null, value, expanded, popupH]);
+
+  // ── Popup editor ──────────────────────────────────────────────────────────
+  // Measure the source field and open the popup pinned to it.
+  const measure = (): PopupRect | null => {
+    const el = sourceRef.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const width = Math.round(r.width * 2);
+    let left = expandAnchor === "right" ? Math.round(r.right - width) : Math.round(r.left);
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    const baseH = Math.max(MIN_LINES * LINE + CHROME, Math.round(r.height));
+    return { top: Math.round(r.top), left, width, baseH };
+  };
+
+  const openPopup = () => {
+    const pr = measure();
+    if (!pr) return;
+    const el = sourceRef.current;
+    caretRef.current = el
+      ? { start: el.selectionStart ?? el.value.length, end: el.selectionEnd ?? el.value.length }
+      : null;
+    setPopupRect(pr);
+    setPopupH(pr.baseH);
+    setExpanded(true);
+  };
+
+  const onSourceFocus = () => {
+    if (!expandable || disabled || expanded) return;
+    openPopup();
+  };
+
+  const onPopupBlur = () => {
+    setMenu(null);
+    setExpanded(false);
+  };
+
+  // Move focus into the popup (restoring the source's caret) the moment it opens.
+  useLayoutEffect(() => {
+    if (!expanded) return;
+    const el = popupRef.current;
+    if (!el) return;
+    el.focus();
+    const c = caretRef.current;
+    caretRef.current = null;
+    const len = el.value.length;
+    const start = c ? Math.min(c.start, len) : len;
+    const end = c ? Math.min(c.end, len) : len;
+    el.setSelectionRange(start, end);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
+
+  // Keep the popup pinned to the (possibly scrolling / resizing) source field.
+  useLayoutEffect(() => {
+    if (!expanded) return;
+    const reposition = () => {
+      const pr = measure();
+      if (pr) setPopupRect((cur) => (cur ? { ...cur, top: pr.top, left: pr.left, width: pr.width } : pr));
+    };
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, expandAnchor]);
+
+  // Grow the popup STEP_LINES at a time whenever its content overflows, capped at
+  // the viewport bottom (past which the textarea just scrolls internally).
+  useLayoutEffect(() => {
+    if (!expanded || !popupRect) return;
+    const el = popupRef.current;
+    if (!el) return;
+    if (el.scrollHeight > el.clientHeight + 2) {
+      const cap = Math.max(popupRect.baseH, window.innerHeight - popupRect.top - 16);
+      setPopupH((h) => Math.min(h + STEP_LINES * LINE, cap));
+    }
+  }, [expanded, value, popupH, popupRect]);
 
   function refreshMenu() {
-    const el = fieldRef.current;
+    const el = activeField();
     if (!el) return;
     if (dismissedRef.current) {
       setMenu(null);
@@ -179,7 +305,7 @@ export function TagField(props: TagFieldProps): JSX.Element {
   }
 
   function complete(tag: PromptTag) {
-    const el = fieldRef.current;
+    const el = activeField();
     if (!el || !menu) return;
     const v = el.value;
     const before = v.slice(0, menu.start);
@@ -189,6 +315,23 @@ export function TagField(props: TagFieldProps): JSX.Element {
     pendingCaretRef.current = before.length + insert.length;
     setMenu(null);
   }
+
+  // Tab / Shift-Tab moves between this panel's fields. The popup is portaled to
+  // <body>, so native Tab order would jump into the browser chrome; instead focus
+  // the previous/next field ([data-fieldnav]) within the same panel group
+  // ([data-field-group]), wrapping around. Focusing a sibling source field reopens
+  // ITS popup, so tabbing walks the popups in visual order. Returns false (→ let
+  // the browser handle Tab) when there's no group or only a single field.
+  const focusFieldBy = (dir: 1 | -1): boolean => {
+    const src = sourceRef.current;
+    const group = src?.closest("[data-field-group]");
+    if (!src || !group) return false;
+    const fields = Array.from(group.querySelectorAll<HTMLElement>("[data-fieldnav]"));
+    const idx = fields.indexOf(src);
+    if (idx === -1 || fields.length < 2) return false;
+    fields[(idx + dir + fields.length) % fields.length].focus();
+    return true;
+  };
 
   const handleChange = (e: ChangeEvent<FieldEl>) => {
     dismissedRef.current = false;
@@ -203,11 +346,17 @@ export function TagField(props: TagFieldProps): JSX.Element {
   const handleKeyDown = (e: ReactKeyboardEvent<FieldEl>) => {
     // Escape with no autocomplete open "commits" the field: edits are already live
     // in the draft (onChange writes through), so this just ends the editing session
-    // by blurring. Stop propagation so it isn't also read as e.g. clear-selection.
+    // by blurring (which, for an expandable field, also closes the popup). Stop
+    // propagation so it isn't also read as e.g. clear-selection.
     if (e.key === "Escape" && !menu) {
       e.preventDefault();
       e.stopPropagation();
-      fieldRef.current?.blur();
+      activeField()?.blur();
+      return;
+    }
+    // Cycle between the panel's fields instead of tabbing into the browser chrome.
+    if (e.key === "Tab" && !menu) {
+      if (focusFieldBy(e.shiftKey ? -1 : 1)) e.preventDefault();
       return;
     }
     if (!menu) return;
@@ -252,7 +401,7 @@ export function TagField(props: TagFieldProps): JSX.Element {
   };
 
   const handleContextMenu = (e: ReactMouseEvent<FieldEl>) => {
-    const el = fieldRef.current;
+    const el = activeField();
     if (!el) return;
     const start = el.selectionStart ?? 0;
     const end = el.selectionEnd ?? 0;
@@ -299,32 +448,50 @@ export function TagField(props: TagFieldProps): JSX.Element {
     .filter(Boolean)
     .join(" ");
 
+  // Handlers shared by the source field and the popup textarea (the two are
+  // never focused at once). onFocus/onBlur are attached per-element below.
   const shared = {
     value,
     placeholder,
     disabled,
     "aria-label": ariaLabel,
     title: refs.length ? resolved : undefined,
-    className: fieldClass,
     spellCheck: false as const,
     onChange: handleChange,
     onSelect: handleSelect,
     onKeyDown: handleKeyDown,
-    // Genuine focus-out closes the dropdown. Clicks ON the dropdown preventDefault
-    // their mousedown, so they don't blur the field and aren't lost.
-    onBlur: () => setMenu(null),
     onDragOver: handleDragOver,
     onDragLeave: handleDragLeave,
     onDrop: handleDrop,
     onContextMenu: handleContextMenu,
   };
 
+  const popupClass =
+    "w-full resize-none overflow-y-auto rounded-md rounded-tr-none border border-accent bg-surface-0 px-2 py-1 text-xs leading-5 text-ink outline-none placeholder:text-ink-faint shadow-2xl";
+
   return (
     <div className="relative flex flex-col gap-1">
       {multiline ? (
-        <textarea ref={fieldRef as RefObject<HTMLTextAreaElement>} {...shared} />
+        <textarea
+          ref={sourceRef as RefObject<HTMLTextAreaElement>}
+          {...shared}
+          data-fieldnav=""
+          className={fieldClass}
+          onFocus={onSourceFocus}
+          // Genuine focus-out closes the dropdown. Clicks ON the dropdown
+          // preventDefault their mousedown, so they don't blur / aren't lost.
+          onBlur={() => setMenu(null)}
+        />
       ) : (
-        <input ref={fieldRef as RefObject<HTMLInputElement>} type="text" {...shared} />
+        <input
+          ref={sourceRef as RefObject<HTMLInputElement>}
+          type="text"
+          {...shared}
+          data-fieldnav=""
+          className={fieldClass}
+          onFocus={onSourceFocus}
+          onBlur={() => setMenu(null)}
+        />
       )}
 
       {undefinedRefs.length > 0 && (
@@ -332,6 +499,38 @@ export function TagField(props: TagFieldProps): JSX.Element {
           undefined: {undefinedRefs.map((n) => "#" + n).join(", ")}
         </div>
       )}
+
+      {expanded &&
+        popupRect &&
+        createPortal(
+          <div
+            className="fixed z-40"
+            style={{ top: popupRect.top, left: popupRect.left, width: popupRect.width }}
+          >
+            {/* Field's hint text as a label tab, attached to the popup's top-right
+                corner (rounded top, flat bottom, sharing the popup's accent border)
+                so it reads as part of the box. Absolutely positioned + open at the
+                bottom so the textarea below stays pixel-aligned with the source. */}
+            {placeholder && (
+              <div className="pointer-events-none absolute bottom-full right-0 max-w-full truncate rounded-t border border-b-0 border-accent bg-surface-2 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-ink-dim">
+                {placeholder}
+              </div>
+            )}
+            <textarea
+              ref={popupRef}
+              {...shared}
+              className={popupClass}
+              style={{ height: popupH }}
+              onBlur={onPopupBlur}
+            />
+            {/* Faint hint for how to dismiss the popup. pointer-events-none so it
+                never blocks selecting text in the corner beneath it. */}
+            <div className="pointer-events-none absolute bottom-1.5 right-2 rounded bg-surface-0/80 px-1 text-[10px] leading-none text-ink-faint">
+              escape/tab to close
+            </div>
+          </div>,
+          document.body,
+        )}
 
       {menu &&
         rect &&

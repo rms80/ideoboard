@@ -6,7 +6,6 @@ import { useUiStore } from "../../state/uiStore";
 import { useImageActions } from "../../hooks/useImageActions";
 import { Button } from "../common/ui";
 import { useContextMenu } from "../common/ContextMenu";
-import type { MenuItem } from "../common/ContextMenu";
 import { BoxLayer } from "./BoxLayer";
 
 /** Largest "WxH"-aspect rectangle that fits inside cw×ch (the contain fit, upscaled). */
@@ -28,48 +27,17 @@ export function ImageStage() {
   const resolution = useSceneStore((s) => s.draft?.resolution);
   const node = scene ? scene.nodes[scene.currentNodeId] : null;
 
-  const {
-    result,
-    url,
-    guideUrl,
-    isEmptyNode,
-    promptSource,
-    openLightbox,
-    copyPrompt,
-    copyImage,
-    downloadImage,
-    uploadImage,
-    pasteImage,
-    pasteGuideImage,
-    removeGuideImage,
-  } = useImageActions();
+  const { result, url, guideUrl, buildMenuItems } = useImageActions();
 
   const status = useGenerationStore((s) => (node ? s.status[node.id] : undefined));
   const error = useGenerationStore((s) => (node ? s.errors[node.id] : undefined));
   const clearError = useGenerationStore((s) => s.clearError);
   const regenerate = useGenerationStore((s) => s.regenerate);
   const showImage = useUiStore((s) => s.showImage);
+  const showGuide = useUiStore((s) => s.showGuide);
   const { menu: ctxMenu, open: openCtx } = useContextMenu();
 
-  const onContextMenu = (e: ReactMouseEvent) => {
-    const items: MenuItem[] = [
-      { label: "Upload image…", onSelect: () => uploadImage() },
-      { label: "Paste image", onSelect: () => void pasteImage() },
-    ];
-    // Guide image only applies to a not-yet-generated node.
-    if (isEmptyNode) {
-      items.push({ label: "Paste guide image", onSelect: () => void pasteGuideImage() });
-      if (guideUrl)
-        items.push({ label: "Remove guide image", onSelect: () => void removeGuideImage() });
-    }
-    items.push(
-      { label: "Copy prompt", onSelect: () => void copyPrompt(), disabled: !promptSource },
-      { label: "Copy image", onSelect: () => void copyImage(), disabled: !url },
-      { label: "Download image", onSelect: () => void downloadImage(), disabled: !url },
-      { label: "View fullscreen", onSelect: () => openLightbox(), disabled: !url },
-    );
-    openCtx(e, items);
-  };
+  const onContextMenu = (e: ReactMouseEvent) => openCtx(e, buildMenuItems());
 
   // Measure the viewport so the image (and the box overlay) can fill it edge-to-edge
   // at the right aspect ratio. The wrapper is sized to the displayed image rect so
@@ -116,9 +84,10 @@ export function ImageStage() {
               className="block h-full w-full select-none object-contain"
               draggable={false}
             />
-          ) : guideUrl ? (
+          ) : guideUrl && showGuide ? (
             // Guide image: a faint (15% opacity / 85% transparent) reference behind
-            // the prompt boxes, shown only until this node has a generated result.
+            // the prompt boxes, shown only until this node has a generated result
+            // (and only while the Guide toggle is on).
             <img
               src={guideUrl}
               alt="guide"

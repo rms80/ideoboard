@@ -11,21 +11,29 @@ export interface MenuItem {
   label: string;
   onSelect: () => void;
   disabled?: boolean;
+  tooltip?: string; // brief hover hint (shown via the global AppTooltips)
 }
+
+/** A horizontal divider between groups of items. */
+export interface MenuSeparator {
+  separator: true;
+}
+
+export type MenuEntry = MenuItem | MenuSeparator;
 
 interface MenuState {
   x: number;
   y: number;
-  items: MenuItem[];
+  items: MenuEntry[];
 }
 
 export function useContextMenu(): {
   menu: ReactNode;
-  open: (e: ReactMouseEvent, items: MenuItem[]) => void;
+  open: (e: ReactMouseEvent, items: MenuEntry[]) => void;
 } {
   const [state, setState] = useState<MenuState | null>(null);
 
-  const open = useCallback((e: ReactMouseEvent, items: MenuItem[]) => {
+  const open = useCallback((e: ReactMouseEvent, items: MenuEntry[]) => {
     e.preventDefault();
     setState({ x: e.clientX, y: e.clientY, items });
   }, []);
@@ -59,21 +67,26 @@ export function useContextMenu(): {
           onMouseDown={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
         >
-          {state.items.map((item, i) => (
-            <button
-              key={i}
-              type="button"
-              disabled={item.disabled}
-              className="block w-full px-3 py-1.5 text-left text-ink transition hover:bg-surface-3 disabled:cursor-not-allowed disabled:text-ink-faint disabled:hover:bg-transparent"
-              onClick={() => {
-                if (item.disabled) return;
-                item.onSelect();
-                close();
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
+          {state.items.map((item, i) =>
+            "separator" in item ? (
+              <div key={i} className="my-1 h-px bg-border" />
+            ) : (
+              <button
+                key={i}
+                type="button"
+                disabled={item.disabled}
+                title={item.tooltip}
+                className="block w-full px-3 py-1.5 text-left text-ink transition hover:bg-surface-3 disabled:cursor-not-allowed disabled:text-ink-faint disabled:hover:bg-transparent"
+                onClick={() => {
+                  if (item.disabled) return;
+                  item.onSelect();
+                  close();
+                }}
+              >
+                {item.label}
+              </button>
+            ),
+          )}
         </div>,
         document.body,
       )

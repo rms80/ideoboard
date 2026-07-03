@@ -163,6 +163,7 @@ export function BoxPanel() {
 
   return (
     <div
+      data-field-group
       onKeyDown={onPanelKeyDown}
       className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto bg-surface-1 p-3 text-sm"
     >
@@ -206,6 +207,8 @@ export function BoxPanel() {
         <div ref={textWrapRef} onKeyDown={onFieldKeyDown}>
           <Field label="Text">
             <TagField
+              expandable
+              expandAnchor="right"
               tags={tags}
               disabled={locked}
               ariaLabel="Box text"
@@ -225,6 +228,7 @@ export function BoxPanel() {
         <Field label="Label">
           <input
             ref={labelRef}
+            data-fieldnav=""
             className={inputClass}
             disabled={locked}
             aria-label="Box label"
@@ -239,6 +243,8 @@ export function BoxPanel() {
         <Field label="Description">
           <TagField
             multiline
+            expandable
+            expandAnchor="right"
             tags={tags}
             ariaLabel="Box description"
             placeholder="Sub-prompt / typographic spec…"

@@ -8,6 +8,7 @@
 //     sitting between the field and the next-node arrow.
 import { useSceneStore } from "../../state/sceneStore";
 import { useImageActions } from "../../hooks/useImageActions";
+import { useContextMenu } from "../common/ContextMenu";
 
 // Square action button matching the nav arrows (28px, muted → hover ink).
 const barBtn =
@@ -68,6 +69,16 @@ function DownloadIcon() {
   );
 }
 
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="5" r="2" />
+      <circle cx="12" cy="12" r="2" />
+      <circle cx="12" cy="19" r="2" />
+    </svg>
+  );
+}
+
 function Chevron({ dir }: { dir: "left" | "right" }) {
   return (
     <svg
@@ -109,8 +120,9 @@ export function StatusBar() {
   const scene = useSceneStore((s) => s.scene);
   const selectNode = useSceneStore((s) => s.selectNode);
   const setNodeNote = useSceneStore((s) => s.setNodeNote);
-  const { url, promptSource, copied, openLightbox, copyPrompt, downloadImage } =
+  const { url, promptSource, copied, openLightbox, copyPrompt, downloadImage, buildMenuItems } =
     useImageActions();
+  const { menu: ctxMenu, open: openCtx } = useContextMenu();
   if (!scene) return null;
 
   const node = scene.nodes[scene.currentNodeId];
@@ -186,6 +198,14 @@ export function StatusBar() {
         >
           <DownloadIcon />
         </button>
+        <button
+          type="button"
+          title="More actions"
+          onClick={(e) => openCtx(e, buildMenuItems())}
+          className={barBtn}
+        >
+          <MoreIcon />
+        </button>
         {copied && (
           <div className="pointer-events-none absolute right-0 top-full z-30 mt-1 whitespace-nowrap rounded border border-border bg-surface-1/95 px-1.5 py-0.5 text-[10px] text-ink-dim shadow">
             copied prompt
@@ -202,6 +222,8 @@ export function StatusBar() {
       >
         <Chevron dir="right" />
       </button>
+
+      {ctxMenu}
     </div>
   );
 }

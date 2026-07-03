@@ -26,6 +26,8 @@ import type {
 } from "../types";
 import { createNode, clonePrompt } from "./factory";
 import { computeLayout } from "../services/layout";
+import { getImage, putImage } from "../services/db";
+import { newId } from "../util/id";
 import { useUiStore } from "./uiStore";
 
 interface SceneData {
@@ -67,6 +69,10 @@ interface SceneActions {
   // Generation-flow ops (NOT undoable)
   commitDraftToCurrentNode: () => void;
   createChildFromDraft: () => ID | null;
+  /** Fired when a node freezes (its first result lands, via generate or upload):
+   *  auto-creates its child (same prompt + a copy of any guide image) WITHOUT
+   *  moving focus — the frozen node stays in view; the child appears in the graph. */
+  advanceAfterFreeze: (frozenNodeId: ID) => void;
   appendResult: (nodeId: ID, result: GenerationResult) => void;
   /** Set (or clear, with undefined) a node's guide image. Not undoable. */
   setGuideImage: (nodeId: ID, imageId: ID | undefined) => void;
@@ -263,11 +269,36 @@ export const useSceneStore = create<SceneStore>()(
         return node.id;
       },
 
+      advanceAfterFreeze: (frozenNodeId) => {
+        const s0 = get();
+        const parent = s0.scene?.nodes[frozenNodeId];
+        if (!s0.scene || !parent) return;
+        const guideId = parent.guideImageId;
+        // Clone the committed prompt that produced the image (not the draft/current
+        // focus, which may be elsewhere for an async generation).
+        const child = createNode(parent.id, clonePrompt(parent.prompt), Date.now());
+        child.note = computeChildNote(s0.scene, parent);
+        // Add the child but DON'T touch currentNodeId/draft — the frozen node stays
+        // in view; the new node only shows up in the graph. Not undoable, matching
+        // the (also-unrecorded) result append that triggered it.
+        withoutHistory(() =>
+          set((s) => {
+            if (s.scene) s.scene.nodes[child.id] = child;
+          })
+        );
+        get().recomputeLayout();
+        // Carry the guide forward as a reference for the next prompt, under its own
+        // blob id so the copy's lifecycle is independent of the parent's.
+        if (guideId) void copyGuideBlob(guideId, child.id);
+      },
+
       appendResult: (nodeId, result) => {
+        let froze = false;
         withoutHistory(() =>
           set((s) => {
             const n = s.scene?.nodes[nodeId];
             if (n) {
+              froze = n.results.length === 0; // 0 → 1: this result freezes the node
               n.results.push(result);
               n.currentResultIndex = n.results.length - 1;
             }
@@ -275,6 +306,8 @@ export const useSceneStore = create<SceneStore>()(
         );
         // A generation just landed → make sure the image is visible.
         useUiStore.getState().setShowImage(true);
+        // Freezing a node auto-creates its child in the background (focus stays put).
+        if (froze) get().advanceAfterFreeze(nodeId);
       },
 
       setGuideImage: (nodeId, imageId) =>
@@ -331,6 +364,17 @@ export const useSceneStore = create<SceneStore>()(
 );
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+/** Duplicate an existing guide-image blob under a fresh id and attach it to a
+ *  node, so the copy's lifecycle is independent of the source (removing one
+ *  won't delete the other's blob). Fire-and-forget; no-op if the blob is gone. */
+async function copyGuideBlob(sourceImageId: ID, targetNodeId: ID): Promise<void> {
+  const blob = await getImage(sourceImageId);
+  if (!blob) return;
+  const imageId = newId();
+  await putImage(imageId, blob);
+  useSceneStore.getState().setGuideImage(targetNodeId, imageId);
+}
 
 function withoutHistory(fn: () => void): void {
   const t = useSceneStore.temporal.getState();

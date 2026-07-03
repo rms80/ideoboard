@@ -95,40 +95,6 @@ function GraphNodeImpl({ data }: NodeProps<IdeoNode>) {
           </div>
         )}
 
-        {resultCount > 1 && (
-          <div
-            className="absolute right-1 top-1 flex items-stretch overflow-hidden rounded bg-surface-0/15 text-xs font-medium text-ink"
-            style={{ transform: `scale(${1 / zoom})`, transformOrigin: "top right" }}
-            // Swallow double-clicks so fast cycling never zooms / opens the node.
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-            }}
-          >
-            <button
-              type="button"
-              title="Previous image"
-              className="flex items-center px-1 text-ink-dim transition hover:bg-ink/10 hover:text-accent"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={cycle(-1)}
-            >
-              <Chevron dir="left" />
-            </button>
-            <span className="flex items-center px-1 tabular-nums leading-none">
-              {idx + 1}/{resultCount}
-            </span>
-            <button
-              type="button"
-              title="Next image"
-              className="flex items-center px-1 text-ink-dim transition hover:bg-ink/10 hover:text-accent"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={cycle(1)}
-            >
-              <Chevron dir="right" />
-            </button>
-          </div>
-        )}
-
         {status === "error" && (
           <div
             className="absolute left-1 top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-surface-0"
@@ -142,6 +108,47 @@ function GraphNodeImpl({ data }: NodeProps<IdeoNode>) {
           </div>
         )}
       </div>
+
+      {/* Result cycler, docked below the node and right-aligned. Lives outside the
+          image's overflow-hidden box so it isn't clipped; counter-scaled to a
+          constant screen size, pinned by its top-right to the node's bottom-right. */}
+      {resultCount > 1 && (
+        <div
+          className="absolute right-0 top-full flex items-stretch overflow-hidden rounded bg-surface-2/90 text-xs font-medium text-ink"
+          style={{
+            transform: `scale(${s})`,
+            transformOrigin: "top right",
+            marginTop: `${4 * s}px`,
+          }}
+          // Swallow double-clicks so fast cycling never zooms / opens the node.
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
+        >
+          <button
+            type="button"
+            title="Previous image"
+            className="flex items-center px-1 text-ink-dim transition hover:bg-ink/10 hover:text-accent"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={cycle(-1)}
+          >
+            <Chevron dir="left" />
+          </button>
+          <span className="flex items-center px-1 tabular-nums leading-none">
+            {idx + 1}/{resultCount}
+          </span>
+          <button
+            type="button"
+            title="Next image"
+            className="flex items-center px-1 text-ink-dim transition hover:bg-ink/10 hover:text-accent"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={cycle(1)}
+          >
+            <Chevron dir="right" />
+          </button>
+        </div>
+      )}
 
       {/* Selected node: tight outline straddling the image edges (1px out / 1px in).
           Rendered outside the overflow-hidden image so the outer half isn't clipped.

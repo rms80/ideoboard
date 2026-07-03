@@ -26,11 +26,13 @@ function ToggleBtn({
   active,
   onClick,
   title,
+  disabled = false,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   title: string;
+  disabled?: boolean;
   children: ReactNode;
 }) {
   // Compact segments (no individual rounding — the container clips them into one
@@ -40,8 +42,9 @@ function ToggleBtn({
       type="button"
       onClick={onClick}
       title={title}
+      disabled={disabled}
       aria-pressed={active}
-      className={`px-1.5 py-px text-[10px] font-medium transition ${
+      className={`px-1.5 py-px text-[10px] font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
         active
           ? "bg-[#3a8a5c] text-white"
           : "bg-surface-1 text-ink-dim hover:bg-surface-2 hover:text-ink"
@@ -56,12 +59,15 @@ export function ResultCycler() {
   const scene = useSceneStore((s) => s.scene);
   const setCurrentResultIndex = useSceneStore((s) => s.setCurrentResultIndex);
   const createChildFromDraft = useSceneStore((s) => s.createChildFromDraft);
+  const selectNode = useSceneStore((s) => s.selectNode);
   const generate = useGenerationStore((s) => s.generate);
   const regenerate = useGenerationStore((s) => s.regenerate);
   const showImage = useUiStore((s) => s.showImage);
   const showPrompts = useUiStore((s) => s.showPrompts);
+  const showGuide = useUiStore((s) => s.showGuide);
   const toggleShowImage = useUiStore((s) => s.toggleShowImage);
   const toggleShowPrompts = useUiStore((s) => s.toggleShowPrompts);
+  const toggleShowGuide = useUiStore((s) => s.toggleShowGuide);
   const speed = useSceneStore((s) => s.draft?.renderingSpeed ?? DEFAULT_RENDERING_SPEED);
   const setRenderingSpeed = useSceneStore((s) => s.setRenderingSpeed);
 
@@ -73,8 +79,19 @@ export function ResultCycler() {
   const idx = node.currentResultIndex;
   const busy = status === "generating";
   const hasImage = count > 0;
+  // A guide image can exist regardless of whether this node has a result; the
+  // toggle stays usable either way (the image just takes precedence when shown).
+  const hasGuide = !!node.guideImageId;
 
-  const hasChildren = !!scene && Object.values(scene.nodes).some((n) => n.parentId === node.id);
+  const children = scene ? Object.values(scene.nodes).filter((n) => n.parentId === node.id) : [];
+  const hasChildren = children.length > 0;
+  // Primary continuation child (earliest-created), mirroring the StatusBar's Next
+  // arrow. When it exists but has no image yet, the right-hand button becomes a
+  // plain "Next" that navigates there rather than branching a brand-new node.
+  const nextId =
+    children.slice().sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))[0]?.id ??
+    null;
+  const nextIsEmpty = !!nextId && (scene?.nodes[nextId]?.results.length ?? 0) === 0;
   const primaryLabel = busy ? "Generating…" : hasImage ? "Regenerate" : "Generate";
   const iterateLabel = hasChildren ? "Branch" : "Edit";
 
@@ -89,7 +106,7 @@ export function ResultCycler() {
           type="button"
           title="Previous result"
           disabled={count <= 1}
-          onClick={() => setCurrentResultIndex(node.id, idx - 1)}
+          onClick={() => setCurrentResultIndex(node.id, (idx - 1 + count) % count)}
           className={cyclerArrow}
         >
           ◀
@@ -101,7 +118,7 @@ export function ResultCycler() {
           type="button"
           title="Next result"
           disabled={count <= 1}
-          onClick={() => setCurrentResultIndex(node.id, idx + 1)}
+          onClick={() => setCurrentResultIndex(node.id, (idx + 1) % count)}
           className={cyclerArrow}
         >
           ▶
@@ -146,24 +163,43 @@ export function ResultCycler() {
         <ToggleBtn active={showPrompts} onClick={toggleShowPrompts} title="Show/hide the prompt boxes">
           Prompts
         </ToggleBtn>
+        <ToggleBtn
+          active={hasGuide && showGuide}
+          disabled={!hasGuide}
+          onClick={toggleShowGuide}
+          title={hasGuide ? "Show/hide the guide image" : "No guide image on this node"}
+        >
+          Guide
+        </ToggleBtn>
       </div>
 
-      {/* Right: Edit / Branch */}
+      {/* Right: Next (go to the empty continuation) / Branch / Edit */}
       <div className="absolute right-0 top-1/2 -translate-y-1/2">
-        <Button
-          variant="default"
-          disabled={busy || !hasImage}
-          onClick={() => createChildFromDraft()}
-          title={
-            hasImage
-              ? hasChildren
-                ? "Spawn a new branch (copies this prompt, no image yet)"
-                : "Spawn the next node (copies this prompt, no image yet)"
-              : "Generate an image first"
-          }
-        >
-          {iterateLabel}
-        </Button>
+        {nextIsEmpty ? (
+          <Button
+            variant="default"
+            disabled={busy}
+            onClick={() => nextId && selectNode(nextId)}
+            title="Go to the next node"
+          >
+            Next
+          </Button>
+        ) : (
+          <Button
+            variant="default"
+            disabled={busy || !hasImage}
+            onClick={() => createChildFromDraft()}
+            title={
+              hasImage
+                ? hasChildren
+                  ? "Spawn a new branch (copies this prompt, no image yet)"
+                  : "Spawn the next node (copies this prompt, no image yet)"
+                : "Generate an image first"
+            }
+          >
+            {iterateLabel}
+          </Button>
+        )}
       </div>
     </div>
   );
