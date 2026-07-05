@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- App mark: the ◈ glyph from the top-left of the UI — accent-blue diamond
+       (hollow outer + solid inner) on the surface-3 tile it sits on in the header. -->
+  <rect width="32" height="32" rx="6" fill="#26262d" />
+  <path d="M16 3 L29 16 L16 29 L3 16 Z" fill="none" stroke="#6d8cff" stroke-width="2.5" stroke-linejoin="round" />
+  <path d="M16 10 L22 16 L16 22 L10 16 Z" fill="#6d8cff" />
+</svg>
