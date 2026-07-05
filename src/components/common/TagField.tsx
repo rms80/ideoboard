@@ -525,7 +525,7 @@ export function TagField(props: TagFieldProps): JSX.Element {
             />
             {/* Faint hint for how to dismiss the popup. pointer-events-none so it
                 never blocks selecting text in the corner beneath it. */}
-            <div className="pointer-events-none absolute bottom-1.5 right-2 rounded bg-surface-0/80 px-1 text-[10px] leading-none text-ink-faint">
+            <div className="pointer-events-none absolute bottom-2 right-2 rounded bg-surface-0/80 px-1 text-[10px] leading-none text-ink-faint">
               escape/tab to close
             </div>
           </div>,

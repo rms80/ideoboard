@@ -8,7 +8,7 @@
 // TagField/box (mime `application/x-ideoboard-tag`, data = bare name).
 // ───────────────────────────────────────────────────────────────────────────
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import type { PromptTag } from "../../types";
 import { useSceneStore, useCurrentNodeLocked } from "../../state/sceneStore";
 import { useUiStore } from "../../state/uiStore";
@@ -17,14 +17,19 @@ import { formatTagLine, isValidTagName, parseTagLine } from "../../services/tags
 import { Button } from "../common/ui";
 
 const TAG_MIME = "application/x-ideoboard-tag";
+// A SECOND mime set on the same drag so a tag row can be dropped back into this
+// list to reorder it (carrying the tag id), while TAG_MIME (the bare name) still
+// lets the same drag be dropped onto a prompt field/box to reference the tag.
+const TAG_REORDER_MIME = "application/x-ideoboard-tag-reorder";
 const EMPTY: PromptTag[] = [];
 
-export function TagsPanel() {
+export function TagsPanel({ tabs }: { tabs?: ReactNode }) {
   const tags = useSceneStore((s) => s.draft?.tags ?? EMPTY);
   const addTag = useSceneStore((s) => s.addTag);
   const addTags = useSceneStore((s) => s.addTags);
   const updateTag = useSceneStore((s) => s.updateTag);
   const removeTags = useSceneStore((s) => s.removeTags);
+  const moveTagToIndex = useSceneStore((s) => s.moveTagToIndex);
 
   const selectedTagIds = useUiStore((s) => s.selectedTagIds);
   const setSelectedTags = useUiStore((s) => s.setSelectedTags);
@@ -38,6 +43,23 @@ export function TagsPanel() {
   const locked = useCurrentNodeLocked();
 
   const panelRef = useRef<HTMLDivElement | null>(null);
+
+  // Drag-reorder state (the tags list is in array order, so a row's visual index
+  // IS its array index). `dragFrom` is the dragged row's index; `dropSlot` is the
+  // insertion gap (0..n) under the cursor. Both cleared when the drag ends.
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dropSlot, setDropSlot] = useState<number | null>(null);
+  const isNoop = (s: number) => dragFrom != null && (s === dragFrom || s === dragFrom + 1);
+  const endDrag = () => {
+    setDragFrom(null);
+    setDropSlot(null);
+  };
+  const performDrop = () => {
+    if (dragFrom == null || dropSlot == null || isNoop(dropSlot)) return endDrag();
+    // Final index of the dragged tag after it's removed from its old slot.
+    moveTagToIndex(tags[dragFrom].id, dropSlot > dragFrom ? dropSlot - 1 : dropSlot);
+    endDrag();
+  };
 
   // An external "create tag from selection" request seeds + focuses the new row.
   // It's read DIRECTLY into the row's props below (not copied into local state)
@@ -113,7 +135,9 @@ export function TagsPanel() {
   return (
     <div className="flex min-h-0 flex-col">
       <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
-        <span className="text-xs font-medium uppercase tracking-wide text-ink-faint">Tags</span>
+        {tabs ?? (
+          <span className="text-xs font-medium uppercase tracking-wide text-ink-faint">Tags</span>
+        )}
         <div className="flex-1" />
         <Button
           variant="ghost"
@@ -149,6 +173,17 @@ export function TagsPanel() {
         tabIndex={0}
         onKeyDown={onPanelKeyDown}
         className="flex min-h-0 flex-1 flex-col overflow-y-auto outline-none"
+        // Dropping in the empty area below the rows appends to the end.
+        onDragOver={(e) => {
+          if (dragFrom == null || e.target !== e.currentTarget) return;
+          e.preventDefault();
+          setDropSlot(tags.length);
+        }}
+        onDrop={(e) => {
+          if (dragFrom == null) return;
+          e.preventDefault();
+          performDrop();
+        }}
       >
         {tags.length === 0 ? (
           <div className="px-2 py-3 text-xs leading-relaxed text-ink-faint">
@@ -156,37 +191,53 @@ export function TagsPanel() {
             and reference it with <span className="text-accent">#colors1</span> in any prompt field.
           </div>
         ) : (
-          tags.map((t) => {
+          tags.map((t, i) => {
             const invalid = !isValidTagName(t.name) || (nameCount.get(t.name) ?? 0) > 1;
             return (
-              <TagRow
-                key={t.id}
-                tag={t}
-                selected={selectedTagIds.includes(t.id)}
-                invalid={invalid}
-                locked={locked}
-                autoFocus={tagEditRequest?.id === t.id}
-                seedHash={!!tagEditRequest?.seedHash && tagEditRequest.id === t.id}
-                onSelect={(additive) => handleSelect(t.id, additive)}
-                onFocusPanel={() => panelRef.current?.focus()}
-                onCommit={(text) => {
-                  const parsed = parseTagLine(text);
-                  updateTag(t.id, (tag) => {
-                    tag.name = parsed.name;
-                    tag.body = parsed.body;
-                  });
-                }}
-                onDelete={() => {
-                  removeTags([t.id]);
-                  setSelectedTags(selectedTagIds.filter((id) => id !== t.id));
-                }}
-              />
+              <div key={t.id}>
+                {dropSlot === i && !isNoop(i) && <DropLine />}
+                <TagRow
+                  tag={t}
+                  selected={selectedTagIds.includes(t.id)}
+                  invalid={invalid}
+                  locked={locked}
+                  dragging={dragFrom === i}
+                  reordering={dragFrom != null}
+                  autoFocus={tagEditRequest?.id === t.id}
+                  seedHash={!!tagEditRequest?.seedHash && tagEditRequest.id === t.id}
+                  onSelect={(additive) => handleSelect(t.id, additive)}
+                  onFocusPanel={() => panelRef.current?.focus()}
+                  onReorderStart={() => setDragFrom(i)}
+                  onReorderEnd={endDrag}
+                  onReorderOver={(slot) => setDropSlot(slot)}
+                  onReorderDrop={performDrop}
+                  rowIndex={i}
+                  onCommit={(text) => {
+                    const parsed = parseTagLine(text);
+                    updateTag(t.id, (tag) => {
+                      tag.name = parsed.name;
+                      tag.body = parsed.body;
+                    });
+                  }}
+                  onDelete={() => {
+                    removeTags([t.id]);
+                    setSelectedTags(selectedTagIds.filter((id) => id !== t.id));
+                  }}
+                />
+                {i === tags.length - 1 && dropSlot === tags.length && !isNoop(tags.length) && (
+                  <DropLine />
+                )}
+              </div>
             );
           })
         )}
       </div>
     </div>
   );
+}
+
+function DropLine() {
+  return <div className="pointer-events-none h-0.5 bg-accent" aria-hidden="true" />;
 }
 
 interface TagRowProps {
@@ -198,6 +249,16 @@ interface TagRowProps {
   // Seed the editor with "# " + body and drop the caret right after the '#'
   // (a freshly created "tag from selection"), instead of the plain formatted line.
   seedHash: boolean;
+  // Drag-reorder: `dragging` = this row is the one being dragged; `reordering` = a
+  // reorder drag is in flight (so this row acts as a drop target). rowIndex is the
+  // row's position; the callbacks report the drag lifecycle to the parent list.
+  dragging: boolean;
+  reordering: boolean;
+  rowIndex: number;
+  onReorderStart: () => void;
+  onReorderEnd: () => void;
+  onReorderOver: (slot: number) => void;
+  onReorderDrop: () => void;
   onSelect: (additive: boolean) => void;
   onFocusPanel: () => void;
   onCommit: (text: string) => void;
@@ -211,6 +272,13 @@ function TagRow({
   locked,
   autoFocus,
   seedHash,
+  dragging,
+  reordering,
+  rowIndex,
+  onReorderStart,
+  onReorderEnd,
+  onReorderOver,
+  onReorderDrop,
   onSelect,
   onFocusPanel,
   onCommit,
@@ -259,13 +327,38 @@ function TagRow({
   };
 
   const onDragStart = (e: ReactDragEvent<HTMLDivElement>) => {
+    // Carry BOTH the name (→ reference onto a field/box) and the id (→ reorder
+    // within this list). copyMove lets each drop target pick its own effect.
     e.dataTransfer.setData(TAG_MIME, tag.name);
-    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData(TAG_REORDER_MIME, tag.id);
+    e.dataTransfer.effectAllowed = "copyMove";
     clearActiveEdit(); // entering a drag: commit/clear any active text edit
+    onReorderStart();
   };
 
   // On drop/cancel, re-clear so the release can't (re)start an edit or selection.
-  const onDragEnd = () => clearActiveEdit();
+  const onDragEnd = () => {
+    clearActiveEdit();
+    onReorderEnd();
+  };
+
+  // Reorder drop target: while a reorder drag is in flight, hovering this row sets
+  // the insertion slot to its top or bottom half; dropping commits via the parent.
+  const onRowDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!reordering) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    const r = rowRef.current?.getBoundingClientRect();
+    if (!r) return;
+    onReorderOver(e.clientY < r.top + r.height / 2 ? rowIndex : rowIndex + 1);
+  };
+  const onRowDrop = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!reordering) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onReorderDrop();
+  };
 
   const onRowMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -287,14 +380,16 @@ function TagRow({
       ref={rowRef}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
+      onDragOver={onRowDragOver}
+      onDrop={onRowDrop}
       onMouseDown={onRowMouseDown}
       className={`group relative flex items-center border py-0.5 ${
-        selected ? "border-accent bg-accent-soft/40" : "border-transparent hover:bg-surface-2"
-      }`}
+        dragging ? "opacity-40" : ""
+      } ${selected ? "border-accent bg-accent-soft/40" : "border-transparent hover:bg-surface-2"}`}
     >
       <span
         className={`select-none pl-[2px] pr-1 text-ink-faint ${locked ? "" : "cursor-grab"}`}
-        title="Drag onto a prompt field or box to reference this tag"
+        title="Drag to reorder, or onto a prompt field/box to reference this tag"
       >
         ⋮⋮
       </span>

@@ -55,6 +55,9 @@ interface SceneActions {
   removeBoxes: (ids: ID[]) => void;
   /** Shift a box in z-order. delta>0 → toward front (end of array / on top). */
   moveBoxZ: (id: ID, delta: number) => void;
+  /** Move a box to an absolute z-order slot (index into the boxes array, where the
+   *  last element is front-most / on top). Used by the Boxes list's drag-reorder. */
+  moveBoxToIndex: (id: ID, toIndex: number) => void;
   /** Cancel a just-drawn box: remove it AND erase its creation from history (no redo). */
   discardDrawnBox: (id: ID) => void;
 
@@ -63,6 +66,9 @@ interface SceneActions {
   addTags: (tags: PromptTag[]) => void;
   updateTag: (id: ID, recipe: (t: PromptTag) => void) => void;
   removeTags: (ids: ID[]) => void;
+  /** Move a tag to an absolute slot (index into the tags array). Used by the Tags
+   *  list's drag-reorder. */
+  moveTagToIndex: (id: ID, toIndex: number) => void;
 
   renameWorkingScene: (name: string) => void;
 
@@ -180,6 +186,21 @@ export const useSceneStore = create<SceneStore>()(
           arr.splice(j, 0, b);
         });
       },
+      moveBoxToIndex: (id, toIndex) => {
+        if (isLocked(get())) return;
+        set((s) => {
+          const arr = s.draft?.boxes;
+          if (!arr) return;
+          const i = arr.findIndex((b) => b.id === id);
+          if (i < 0) return;
+          // `toIndex` is the desired FINAL index in the (same-length) array; splice
+          // it back in there after removal. Clamp + no-op if it doesn't move.
+          const j = Math.max(0, Math.min(toIndex, arr.length - 1));
+          if (j === i) return;
+          const [b] = arr.splice(i, 1);
+          arr.splice(j, 0, b);
+        });
+      },
 
       discardDrawnBox: (id) => {
         if (isLocked(get())) return;
@@ -225,6 +246,21 @@ export const useSceneStore = create<SceneStore>()(
         if (isLocked(get())) return;
         set((s) => {
           if (s.draft) s.draft.tags = s.draft.tags.filter((t) => !ids.includes(t.id));
+        });
+      },
+      moveTagToIndex: (id, toIndex) => {
+        if (isLocked(get())) return;
+        set((s) => {
+          const arr = s.draft?.tags;
+          if (!arr) return;
+          const i = arr.findIndex((t) => t.id === id);
+          if (i < 0) return;
+          // `toIndex` is the desired FINAL index in the (same-length) array; splice
+          // it back in there after removal. Clamp + no-op if it doesn't move.
+          const j = Math.max(0, Math.min(toIndex, arr.length - 1));
+          if (j === i) return;
+          const [t] = arr.splice(i, 1);
+          arr.splice(j, 0, t);
         });
       },
 

@@ -1,6 +1,6 @@
 import type { Plugin, Connect } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { generate, image } from "./api/handlers";
+import { generate, describe, image } from "./api/handlers";
 
 // Mounts the framework-agnostic proxy handlers at /api/* inside the Vite dev
 // server, so `npm run dev` serves the app AND the proxy on one port (6868).
@@ -8,6 +8,7 @@ import { generate, image } from "./api/handlers";
 
 const ROUTES: Record<string, (req: Request) => Promise<Response>> = {
   "/api/generate": generate,
+  "/api/describe": describe,
   "/api/image": image,
 };
 

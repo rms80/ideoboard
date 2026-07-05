@@ -8,6 +8,7 @@
 // ───────────────────────────────────────────────────────────────────────────
 
 const IDEOGRAM_GENERATE_URL = "https://api.ideogram.ai/v1/ideogram-v4/generate";
+const IDEOGRAM_DESCRIBE_URL = "https://api.ideogram.ai/v1/ideogram-v4/describe";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -27,8 +28,10 @@ function preflight(): Response {
   return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
 
-/** POST /api/generate — relay the multipart body to Ideogram with the user's key. */
-export async function generate(req: Request): Promise<Response> {
+/** Relay a multipart POST to an Ideogram endpoint with the user's key, passing the
+ *  upstream status + body straight back (errors included) with CORS. Shared by the
+ *  /api/generate and /api/describe routes — both forward the raw multipart body. */
+async function relayMultipart(req: Request, upstreamUrl: string): Promise<Response> {
   if (req.method === "OPTIONS") return preflight();
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
@@ -43,7 +46,7 @@ export async function generate(req: Request): Promise<Response> {
 
   let upstream: Response;
   try {
-    upstream = await fetch(IDEOGRAM_GENERATE_URL, {
+    upstream = await fetch(upstreamUrl, {
       method: "POST",
       headers: { "Api-Key": apiKey, "Content-Type": contentType },
       body,
@@ -53,7 +56,6 @@ export async function generate(req: Request): Promise<Response> {
   }
 
   const text = await upstream.text();
-  // Pass Ideogram's status + body straight through (errors included) with CORS.
   return new Response(text, {
     status: upstream.status,
     headers: {
@@ -61,6 +63,17 @@ export async function generate(req: Request): Promise<Response> {
       "Content-Type": upstream.headers.get("content-type") ?? "application/json",
     },
   });
+}
+
+/** POST /api/generate — relay the multipart body to Ideogram with the user's key. */
+export function generate(req: Request): Promise<Response> {
+  return relayMultipart(req, IDEOGRAM_GENERATE_URL);
+}
+
+/** POST /api/describe — relay the guide image to Ideogram's describe endpoint,
+ *  which returns a `json_prompt` reconstruction of the image. Ideogram-only. */
+export function describe(req: Request): Promise<Response> {
+  return relayMultipart(req, IDEOGRAM_DESCRIBE_URL);
 }
 
 function isAllowedImageHost(hostname: string): boolean {

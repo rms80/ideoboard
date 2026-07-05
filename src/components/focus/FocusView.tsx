@@ -1,5 +1,5 @@
 import { PromptPanel } from "./PromptPanel";
-import { TagsPanel } from "./TagsPanel";
+import { LeftListPanel } from "./LeftListPanel";
 import { ImageStage } from "./ImageStage";
 import { ResultCycler } from "./ResultCycler";
 import { StatusBar } from "./StatusBar";
@@ -10,8 +10,8 @@ import { RightBar } from "../RightBar";
 // Three columns. The two half-top-bars cap the side columns (LeftBar over the
 // left panel, RightBar over the right panel); the center has no bar so the image
 // viewport reaches the top of the page. Left: vertical split — PromptPanel sizes
-// to its content at the top; TagsPanel grows to fill the remaining space below
-// it. Center: ImageStage with StatusBar (node nav + result label) + ResultCycler
+// to its content at the top; the tabbed Tags/Boxes list grows to fill the
+// remaining space below it. Center: ImageStage with StatusBar (node nav + result label) + ResultCycler
 // controls. Right: BoxPanel — edits the selected box (clears when none selected).
 export function FocusView() {
   return (
@@ -23,7 +23,7 @@ export function FocusView() {
           <PromptPanel />
         </div>
         <div className="min-h-0 flex-1 overflow-hidden border-t border-border">
-          <TagsPanel />
+          <LeftListPanel />
         </div>
       </div>
 

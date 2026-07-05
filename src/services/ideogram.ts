@@ -6,6 +6,7 @@ import { resolveText } from "./tags";
 import type {
   StructuredPrompt,
   PromptStyle,
+  PromptBox,
   V4JsonPrompt,
   V4StyleDescription,
   V4Element,
@@ -106,6 +107,104 @@ export interface IdeogramImage {
 export interface IdeogramResponse {
   created?: string;
   data: IdeogramImage[];
+}
+
+// ─── Describe (receive-time): guide image → our structured prompt ────────────
+// The inverse direction of promptToV4Json. Ideogram's /describe returns a
+// `json_prompt` in the same V4 shape we send to /generate; we map it back onto
+// our StructuredPrompt fields so the guide image can seed a fresh node.
+
+export interface DescribeResponse {
+  json_prompt?: V4JsonPrompt;
+}
+
+/** Draft-ready fields parsed from a describe response. Boxes come WITHOUT ids
+ *  (the caller assigns `newId()`), keeping this mapper pure. */
+export interface DescribedPromptFields {
+  highLevelDescription: string;
+  background?: string;
+  style?: PromptStyle;
+  boxes: Omit<PromptBox, "id">[];
+}
+
+/** Clamp/round a bbox coordinate into Ideogram's 0–1000 normalized range. */
+function clampCoord(n: number): number {
+  return Math.max(0, Math.min(1000, Math.round(Number(n) || 0)));
+}
+
+/** Pure: map an Ideogram v4 json_prompt back onto our prompt fields + boxes. */
+export function v4JsonToPromptFields(jp: V4JsonPrompt): DescribedPromptFields {
+  const sd = jp.style_description;
+  const style: PromptStyle | undefined = sd
+    ? dropUndefined({
+        aesthetics: sd.aesthetics,
+        lighting: sd.lighting,
+        medium: sd.medium,
+        artStyle: sd.art_style,
+        photo: sd.photo,
+        colorPalette: sd.color_palette?.length ? sd.color_palette : undefined,
+      })
+    : undefined;
+
+  const cd = jp.compositional_deconstruction;
+  const boxes: Omit<PromptBox, "id">[] = (cd?.elements ?? []).map((el) => {
+    // Ideogram bbox order is [y_min, x_min, y_max, x_max], 0–1000.
+    const [y0, x0, y1, x1] = el.bbox ?? [0, 0, 0, 0];
+    const xa = clampCoord(x0);
+    const xb = clampCoord(x1);
+    const ya = clampCoord(y0);
+    const yb = clampCoord(y1);
+    const box: Omit<PromptBox, "id"> = {
+      kind: el.type === "text" ? "text" : "obj",
+      desc: el.desc ?? "",
+      bbox: {
+        xMin: Math.min(xa, xb),
+        yMin: Math.min(ya, yb),
+        xMax: Math.max(xa, xb),
+        yMax: Math.max(ya, yb),
+      },
+    };
+    if (el.type === "text") box.text = el.text ?? "";
+    return box;
+  });
+
+  return {
+    highLevelDescription: jp.high_level_description ?? "",
+    background: cd?.background,
+    style: style && Object.keys(style).length ? style : undefined,
+    boxes,
+  };
+}
+
+/** POST the guide image to /api/describe (relayed to Ideogram); returns its
+ *  json_prompt. Throws on error. Ideogram-only — Fal has no describe endpoint. */
+export async function describeImage(imageFile: Blob, apiKey: string): Promise<V4JsonPrompt> {
+  const fd = new FormData();
+  const ext =
+    imageFile.type === "image/jpeg" ? "jpg" : imageFile.type === "image/webp" ? "webp" : "png";
+  fd.append("image_file", imageFile, `guide.${ext}`);
+  fd.append("include_bbox", "true"); // keep bounding boxes so we can rebuild the boxes
+
+  const res = await fetch("/api/describe", {
+    method: "POST",
+    headers: { "X-Api-Key": apiKey }, // do NOT set Content-Type — browser adds the boundary
+    body: fd,
+  });
+
+  const text = await res.text();
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`Unexpected response from Ideogram: ${text.slice(0, 200)}`);
+  }
+  if (!res.ok) {
+    const err = json as { error?: string; message?: string };
+    throw new Error(err?.error || err?.message || `Describe failed (HTTP ${res.status})`);
+  }
+  const jp = (json as DescribeResponse).json_prompt;
+  if (!jp) throw new Error("Ideogram describe response missing json_prompt.");
+  return jp;
 }
 
 /** POST the prompt to the proxy; returns parsed Ideogram response. Throws on error. */

@@ -47,6 +47,10 @@ interface UiState {
   showGuide: boolean;
   // Fullscreen image lightbox (modal pan/zoom of the current node's active result).
   lightboxOpen: boolean;
+  // "Describe guide image" (Ideogram) is in flight → ImageStage shows a busy
+  // overlay; describeError holds the last failure message until dismissed.
+  describing: boolean;
+  describeError: string | null;
 
   setViewMode: (m: ViewMode) => void;
   toggleViewMode: () => void;
@@ -60,6 +64,8 @@ interface UiState {
   closeSettings: () => void;
   openLightbox: () => void;
   closeLightbox: () => void;
+  setDescribing: (v: boolean) => void;
+  setDescribeError: (msg: string | null) => void;
 
   setSelectedBoxes: (ids: ID[]) => void;
   toggleBoxSelection: (id: ID, additive: boolean) => void;
@@ -94,6 +100,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   showPrompts: true,
   showGuide: true,
   lightboxOpen: false,
+  describing: false,
+  describeError: null,
 
   setViewMode: (viewMode) => set({ viewMode }),
   toggleViewMode: () => set({ viewMode: get().viewMode === "graph" ? "focus" : "graph" }),
@@ -118,6 +126,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   closeSettings: () => set({ settingsOpen: false }),
   openLightbox: () => set({ lightboxOpen: true }),
   closeLightbox: () => set({ lightboxOpen: false }),
+  setDescribing: (describing) => set({ describing }),
+  setDescribeError: (describeError) => set({ describeError }),
 
   setSelectedBoxes: (selectedBoxIds) =>
     set({ selectedBoxIds, inspectorBoxId: selectedBoxIds.length === 1 ? selectedBoxIds[0] : null }),

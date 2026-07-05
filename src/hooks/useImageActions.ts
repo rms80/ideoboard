@@ -7,9 +7,10 @@ import type { GenerationResult } from "../types";
 import type { MenuEntry } from "../components/common/ContextMenu";
 import { useSceneStore } from "../state/sceneStore";
 import { useUiStore } from "../state/uiStore";
+import { useSettingsStore } from "../state/settingsStore";
 import { clonePrompt } from "../state/factory";
 import { useObjectUrl } from "./useObjectUrl";
-import { promptToV4Json } from "../services/ideogram";
+import { promptToV4Json, describeImage, v4JsonToPromptFields } from "../services/ideogram";
 import { getImage, putImage, deleteImageBlob } from "../services/db";
 import { padToSquare, storeImageBlob, toPngBlob, revokeObjectURL } from "../services/images";
 import { newId } from "../util/id";
@@ -28,6 +29,8 @@ export function useImageActions() {
   const hasGuide = !!node?.guideImageId;
   const guideUrl = useObjectUrl(node?.guideImageId, "image");
   const openLightbox = useUiStore((s) => s.openLightbox);
+  // Ideogram-only: "Describe guide image" is disabled for the Fal.ai provider.
+  const provider = useSettingsStore((s) => s.provider);
 
   // "Copied prompt" flash for the copy button (auto-clears).
   const [copied, setCopied] = useState(false);
@@ -193,6 +196,43 @@ export function useImageActions() {
     }
   };
 
+  // Send the current node's guide image to Ideogram's /describe endpoint and fill
+  // the (empty) draft prompt from the returned json_prompt: the descriptive fields
+  // (high-level description, background, style) plus one box per detected element.
+  // Ideogram-only; no-ops on a node that already has a result (editDraft is
+  // lock-gated, so there'd be nothing to fill). Boxes are APPENDED to the draft.
+  const describeGuideImage = async () => {
+    const s0 = useSceneStore.getState();
+    const nodeId = s0.scene?.currentNodeId;
+    const target = nodeId ? s0.scene?.nodes[nodeId] : undefined;
+    const guideId = target?.guideImageId;
+    if (!nodeId || !target || !guideId || target.results.length > 0) return;
+
+    const { provider: activeProvider, apiKey } = useSettingsStore.getState();
+    if (activeProvider !== "ideogram") return; // Fal has no describe endpoint
+
+    const blob = await getImage(guideId);
+    if (!blob) return;
+
+    const ui = useUiStore.getState();
+    ui.setDescribeError(null);
+    ui.setDescribing(true);
+    try {
+      const jp = await describeImage(blob, apiKey);
+      const fields = v4JsonToPromptFields(jp);
+      s0.editDraft((prompt) => {
+        prompt.highLevelDescription = fields.highLevelDescription;
+        if (fields.background != null) prompt.background = fields.background;
+        if (fields.style) prompt.style = { ...prompt.style, ...fields.style };
+        for (const b of fields.boxes) prompt.boxes.push({ ...b, id: newId() });
+      });
+    } catch (err) {
+      ui.setDescribeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      ui.setDescribing(false);
+    }
+  };
+
   // The action list shared by the ImageStage right-click menu and the StatusBar
   // "more actions" button, so the two always offer exactly the same options.
   // Grouped: displayed-result actions, then import actions, then guide-image
@@ -247,6 +287,17 @@ export function useImageActions() {
       }
       if (hasGuide) {
         items.push({
+          label: "Generate Prompt from Guide",
+          tooltip:
+            provider !== "ideogram"
+              ? "Available only with the Ideogram provider (Fal.ai has no describe endpoint)"
+              : !isEmptyNode
+                ? "Describe fills an empty prompt — this node already has a result"
+                : "Analyze the guide image with Ideogram and fill in the prompt fields & boxes",
+          onSelect: () => void describeGuideImage(),
+          disabled: provider !== "ideogram" || !isEmptyNode,
+        });
+        items.push({
           label: "Copy guide image",
           tooltip: "Copy the guide image to the clipboard",
           onSelect: () => void copyGuideImage(),
@@ -277,6 +328,7 @@ export function useImageActions() {
     pasteGuideImage,
     removeGuideImage,
     copyGuideImage,
+    describeGuideImage,
     buildMenuItems,
   };
 }
