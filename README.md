@@ -1,6 +1,10 @@
 # Ideoboard
 
-Ideoboard is a browser front-end for [Ideogram's](https://ideogram.ai) v4 text-to-image model. Instead of a single prompt box, it gives you a structured, spatial editor: you compose a scene from a high-level description, style fields, reusable text fragments (**tags**), and **boxes** drawn directly on the canvas — text or object regions with their own descriptions and z-order — then generate, branch, and iterate across a node graph of results. It's a client-side app (React + TypeScript + Vite + Tailwind, with all scenes and images stored locally in IndexedDB); the only network calls are to the image-generation provider.
+Ideoboard is a browser front-end for prompting [Ideogram's](https://ideogram.ai) v4 text-to-image model. Instead of a single prompt box, it gives you a structured, spatial editor: you compose a scene from a high-level description, style fields, reusable text fragments (**tags**), and **boxes** drawn directly on the canvas — Text or Object regions with their own descriptions and z-order. Then Generate one or more images for based on the Prompt. 
+
+All Prompts used to generate Images are tracked, as separate "nodes" in a visual Graph View. IE each Node is a unique Prompt w/ the Images generated from that prompt. Incremental Edits to the evolving Prompt are made in new Nodes applied at the end of a Prompt sequence. A given Prompt node can also be Branched to create a new separate generation sequence in the Graph.
+
+It's a client-side app (React + TypeScript + Vite + Tailwind, with all scenes and images stored locally in IndexedDB); the only network calls are to the image-generation provider.
 
 ## Running locally
 
@@ -31,6 +35,8 @@ Ideoboard is designed to run **serverless**. It's a static single-page app (buil
 Ideoboard can talk to Ideogram through either of two providers, selectable in the in-app **Settings** dialog:
 
 - **Fal.ai** (default) — calls the `ideogram/v4` model on the [fal.ai](https://fal.ai) queue **directly from the browser**. fal supports CORS, so no proxy is involved.
+
+  *Note: Fal.ai support may not be fully functional — bounding boxes do not seem to always be respected.*
 - **Ideogram API** — calls Ideogram's official API. Ideogram's endpoints don't allow direct browser (CORS) requests, so requests are **relayed through the app's own same-origin proxy** (`/api/generate`, `/api/describe`). In development the proxy is Vite middleware; in production it's a Vercel Edge function. Some features are Ideogram-only — notably **Generate Prompt from Guide**, which uses Ideogram's `describe` endpoint to reconstruct a structured prompt from a guide image.
 
 ### How keys are configured and stored
@@ -39,3 +45,7 @@ Ideoboard can talk to Ideogram through either of two providers, selectable in th
 - Keys are persisted **only in your browser's `localStorage`** (under `ideoboard-settings`). They are never written to the repo and there is no server-side key storage.
 - The key is supplied **per request**: for Fal it's sent from the browser straight to fal; for Ideogram it's forwarded by the same-origin proxy to Ideogram (the proxy holds no secret of its own, so deploying needs zero environment configuration).
 - With no key set for the active provider, generation falls back to a locally-rendered placeholder image, so the graph/branching flow still works offline.
+
+## License
+
+Ideoboard is released under the [MIT License](LICENSE).
